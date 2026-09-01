@@ -2125,17 +2125,12 @@ describe("server local API auth", () => {
       expiresAt: now + CODEX_THREAD_AFFINITY_IDLE_TTL_MS + 10 * 60_000,
       chatgptAccountId: "acct-pool-a",
     });
-    updateAccountQuota("pool-a", 10, 5);
-
     const originalNow = Date.now;
-    // Pin the clock BEFORE startServer, not after. `startServer` returns synchronously but
-    // arms an async pool-quota prime (src/server/index.ts:2054-2064) that outlives its
-    // return, and that prime decides staleness with `Date.now() - quota.updatedAt >=
-    // POOL_CACHE_TTL` (src/codex/auth-api.ts:1334-1337). `updateAccountQuota` above stamped
-    // `updatedAt` with the REAL clock, so a prime that lands after a 2027 fake clock is
-    // installed sees months of cache age, fetches, and rotates the credential out from under
-    // the assertions. Installing the clock first closes the window entirely.
+    // Pin the clock before both the quota write and startServer. The startup prime compares
+    // its fake-clock read with updateAccountQuota's timestamp; writing that timestamp under
+    // the real clock still makes a fresh fixture look stale and leaves a refresh race.
     Date.now = () => now;
+    updateAccountQuota("pool-a", 10, 5);
     const server = startServer(0);
     try {
       for (const threadId of ["expired-http", "expired-compact", "expired-ws"]) {
@@ -2246,18 +2241,13 @@ describe("server local API auth", () => {
       expiresAt: now + 120_000,
       chatgptAccountId: "acct-pool-a",
     });
-    updateAccountQuota("pool-a", 10, 5);
-
     const originalNow = Date.now;
     const originalFetch = globalThis.fetch;
-    // Both the clock and the fetch stub go up before `startServer`. The async pool-quota
-    // prime it arms (src/server/index.ts:2054-2064) reads the clock AND fetches, so leaving
-    // either real for the width of two dynamic `import()` resolutions is what made this test
-    // fail on loaded CI runners while passing locally: the prime judged `pool-a` stale
-    // against a 2027 clock versus a `updatedAt` stamped in real time, then refreshed the
-    // credential before the first turn was served — so `seenAuth[0]` was already the new
-    // token. The failure diff was always the first element, never the second.
+    // The quota write, startup prime, and request turns must share one clock. Installing the
+    // fake clock only before startServer leaves updateAccountQuota stamped in real time, so
+    // the prime can still judge the fresh row stale and rotate before the first turn.
     Date.now = () => now;
+    updateAccountQuota("pool-a", 10, 5);
     globalThis.fetch = (async (input, init) => {
         const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
         if (url === "https://auth.openai.com/oauth/token") {
