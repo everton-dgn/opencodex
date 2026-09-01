@@ -267,6 +267,9 @@ async function refreshNativeMainCompactContext(args: {
     }
     return { ok: true, authCtx: refreshedAuthCtx, provider: refreshedProvider, headers };
   } catch (error) {
+    if (req.signal.aborted) {
+      return { ok: false, response: formatErrorResponse(499, "client_cancelled", "Client cancelled compact request") };
+    }
     return { ok: false, response: nativeMainRefreshFailureResponse(error) };
   }
 }
@@ -614,6 +617,9 @@ export async function handleResponsesCompact(
         }
       }
     } catch (err) {
+      if (req.signal.aborted) {
+        return formatErrorResponse(499, "client_cancelled", "Client cancelled compact request");
+      }
       const response = mapCodexAuthContextErrorToResponse(err, {
         accountSelector: route.codexAccountNamespace,
         now: Date.now(),
