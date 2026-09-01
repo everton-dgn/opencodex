@@ -161,7 +161,9 @@ command exits 0 only when healthy and 1 otherwise, making it suitable for servic
 
 Check post-sync readiness through the unauthenticated `GET /readyz` endpoint. It returns `200` when
 ready, or `503` with `Retry-After: 1` for `pending` and terminal `failed`. Its sanitized HTTP identity
-is `{service, version, uptime, pid, port, status}`. Old proxies without `/readyz` fail closed as
+is `{service, version, uptime, pid, port, status, protocol, minimumClientProtocol, managementUrl}`.
+`protocol` is the hub's current remote protocol, `minimumClientProtocol` is the oldest compatible
+client protocol, and `managementUrl` is the canonical browser-facing management origin. Old proxies without `/readyz` fail closed as
 `unreachable`; `/healthz` is separate liveness, not readiness. The command performs one probe by
 default; `--wait` polls until ready or timeout, but exits immediately when it observes the terminal `failed` state. The
 default timeout is 45 seconds; `--timeout <seconds>` requires `--wait` and accepts positive integer seconds from 1–300.

@@ -266,3 +266,5 @@ intended account and workload.
 ## Remote Hub keys and defaults
 
 `runtimeRole` defaults to `standalone`. A hub uses `hub.managementPublicOrigin`, loopback-only `hub.managementIngress` (`enabled:false` when absent), and exact `remoteGui.allowedTailscaleUsers` (empty when absent). A client data key lives in `service-api-token`, never `config.json`; rotation may temporarily create `service-api-token.prev`. Usage stores are not mirrored.
+
+`remoteGui.allowInsecureHttp` is a retired, deprecated no-op retained only so older strict-schema configs still load. Remove it from config: pairing grants are accepted only over loopback or authenticated HTTPS, and setting this key to `true` does not reopen plaintext pairing.
