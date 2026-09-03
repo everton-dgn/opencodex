@@ -432,7 +432,9 @@ describe("account login --device", () => {
     try {
       const reader = child.stdout.getReader();
       let received = "";
-      while (!received.includes("device-requested")) {
+      // The marker is emitted when the request lands, which is BEFORE the CLI
+      // prints its block — wait for both, not just the first one.
+      while (!received.includes("device-requested") || !received.includes("Flow: flow-device")) {
         const { value, done } = await Promise.race([
           reader.read(),
           Bun.sleep(5_000).then(() => ({ value: undefined, done: true }) as const),
@@ -472,10 +474,29 @@ describe("account login --device", () => {
   });
 
   test("is rejected for providers that have no device flow", async () => {
-    const result = await run(["login", "kimi", "--device", "--no-wait"]);
+    const result = await run(["login", "anthropic", "--device", "--no-wait"]);
 
     expect(result.code).not.toBe(0);
-    expect(result.output).toContain("--device is only supported for the openai provider");
+    expect(result.output).toContain("--device is not supported for provider 'anthropic'");
+  });
+
+  test("is accepted as a no-op for providers that are already device flows", async () => {
+    // kimi/nous/github-copilot have no other login, so --device is true of them.
+    const result = await run(["login", "kimi", "--device", "--no-wait", "--json"]);
+
+    expect(result.code).toBe(0);
+  });
+
+  test("waits out the full 15-minute grant instead of the 5-minute browser budget", async () => {
+    // A budget regression to 150 attempts is invisible to an output assertion,
+    // so read the loop bound from the source itself.
+    const source = await Bun.file(new URL("../src/cli/account-auth.ts", import.meta.url)).text();
+    const budget = /const maxAttempts = device \? (\d+) : (\d+);/.exec(source);
+    expect(budget).toBeTruthy();
+    // 2s per attempt: the device budget must cover the 15-minute grant.
+    expect(Number(budget?.[1]) * 2).toBeGreaterThanOrEqual(900);
+    // The browser path is unchanged.
+    expect(budget?.[2]).toBe("150");
   });
 });
 

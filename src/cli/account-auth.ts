@@ -59,6 +59,9 @@ interface LoginStart {
 /** `-` means "read it from stdin", the documented way to pass a code silently. */
 const STDIN_SENTINEL = "-";
 
+/** Providers whose ONLY login is already a device flow; --device is redundant, not wrong. */
+const DEVICE_NATIVE_PROVIDERS = new Set(["kimi", "nous", "github-copilot"]);
+
 const ARGV_WARNING =
   "warning: the authorization code was passed as a command-line argument, so it is now in your shell history and was visible in the process list while this ran. Pipe it on stdin instead, or pass `-` to read from stdin.";
 
@@ -96,8 +99,11 @@ async function login(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   const suppliedCode = takeOptionWithSyntax(args, "--code");
   if (!provider) throw new CliUsageError("provider is required", USAGE);
   rejectArgs(args, USAGE);
-  if (device && !CODEX_NAMES.has(provider)) {
-    throw new CliUsageError("--device is only supported for the openai provider", USAGE);
+  // kimi, nous, and github-copilot are already device flows, so --device is a
+  // true statement about them and is accepted as a no-op rather than an error.
+  // Anything else has no device grant at all and must fail loudly.
+  if (device && !CODEX_NAMES.has(provider) && !DEVICE_NATIVE_PROVIDERS.has(provider)) {
+    throw new CliUsageError(`--device is not supported for provider '${provider}'`, USAGE);
   }
   // Only resolve when --code was actually given: a plain `ocx account login`
   // opens the browser flow and polls, and must not block on stdin.
@@ -136,8 +142,9 @@ async function login(argv: string[], deps: RuntimeApiDeps): Promise<void> {
     if (!start.flowId) throw new CliUsageError("login did not return a flow id");
     // A device login is deliberately slow: the user leaves this machine to
     // enter the code elsewhere. Match the 15-minute grant instead of giving up
-    // at minute five while it is still valid.
-    const maxAttempts = device ? 450 : 150;
+    // at minute five while it is still valid, plus settlement margin for the
+    // token exchange and credential write after the final poll.
+    const maxAttempts = device ? 480 : 150;
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       await Bun.sleep(2_000);
       const state = await runtimeRequest<Record<string, unknown>>(

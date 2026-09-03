@@ -6,8 +6,6 @@
  */
 import { cmdAccount, type AccountDeps } from "../../src/cli/account";
 
-let sawDeviceRequest = false;
-
 const server = Bun.serve({
   hostname: "127.0.0.1",
   port: 0,
@@ -15,7 +13,9 @@ const server = Bun.serve({
     const url = new URL(req.url);
     if (req.method === "POST" && url.pathname === "/api/codex-auth/login") {
       const body = (await req.json().catch(() => ({}))) as { device?: boolean };
-      sawDeviceRequest = body.device === true;
+      // Emit on receipt rather than on a timer: a slow start would otherwise
+      // miss the window and hang the parent instead of failing an assertion.
+      if (body.device === true) process.stdout.write("device-requested\n");
       return Response.json({
         url: "https://auth.openai.com/codex/device",
         instructions: "Enter code: ABCD-EFGH",
@@ -35,12 +35,6 @@ const deps: AccountDeps = {
   baseUrl: `http://127.0.0.1:${server.port}`,
   loadConfigImpl: () => ({ providers: {} }) as ReturnType<NonNullable<AccountDeps["loadConfigImpl"]>>,
 };
-
-// Report the request shape on stdout too, so the parent can assert the flag
-// actually reached the server rather than only that output looked right.
-setTimeout(() => {
-  if (sawDeviceRequest) process.stdout.write("device-requested\n");
-}, 500);
 
 await cmdAccount(["login", "openai", "--device"], deps);
 server.stop(true);

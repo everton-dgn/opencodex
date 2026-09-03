@@ -3718,6 +3718,16 @@ describe("codex-auth API", () => {
     }
   });
 
+  test("the device poll budget covers the 15-minute grant", async () => {
+    // The budget is a loop bound with no observable output, so a regression to
+    // the 5-minute browser budget would pass every behavioral test above.
+    const source = await Bun.file(new URL("../src/codex/auth-api.ts", import.meta.url)).text();
+    const budget = /const pollAttempts = useDeviceFlow \? (\d+) : (\d+);/.exec(source);
+    expect(budget).toBeTruthy();
+    expect(Number(budget?.[1]) * 2).toBeGreaterThanOrEqual(900);
+    expect(budget?.[2]).toBe("150");
+  });
+
   test("Codex OAuth login responses project raw provider errors", async () => {
     const oauth = await import("../src/oauth");
     const startSpy = spyOn(oauth, "startLoginFlow").mockImplementation(async () => {

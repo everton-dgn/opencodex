@@ -294,8 +294,14 @@ ocx account login openai --device --no-wait --json
 Open that URL on any other machine, enter the short code, and the login completes. Without
 `--no-wait` the command polls until you finish; the device grant lives 15 minutes, and the
 command waits that long rather than the 5 minutes a browser login allows, because the point
-is that you walk away to another device. The flag is rejected for other providers, which
-either have their own device flow already or have none.
+is that you walk away to another device. `kimi`, `nous`, and `github-copilot` accept the flag
+as a no-op because their only login is already a device flow; a provider with no device grant
+rejects it.
+
+In the dashboard, the same login is selected by the **"Don't open a browser on the proxy
+machine"** checkbox on the add-account modal. That setting already means the operator is not
+sitting at the proxy host, which is exactly when a callback URL is useless — so ticking it
+switches the Codex login to the device flow and shows a copyable code instead.
 
 ### `ocx account remove <provider> <id|main> --yes [--json]`
 

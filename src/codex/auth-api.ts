@@ -2229,8 +2229,10 @@ export async function handleCodexAuthAPI(
           // The device grant lives 15 minutes and the whole point is that the
           // user walks to another device to enter the code. A 5-minute server
           // budget would kill the flow at minute five while the grant is still
-          // valid.
-          const pollAttempts = useDeviceFlow ? 450 : 150;
+          // valid. The extra 30 attempts past 450 are settlement margin: a user
+          // who authorizes in the final seconds still needs the token exchange
+          // and credential write to land before this loop gives up.
+          const pollAttempts = useDeviceFlow ? 480 : 150;
           for (let i = 0; i < pollAttempts; i++) {
             await new Promise(r => setTimeout(r, 2000));
             const st = getLoginStatus("chatgpt");

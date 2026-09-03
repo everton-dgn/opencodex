@@ -7,8 +7,18 @@ import type {
 } from "./add-codex-account-reducer";
 import type { TFn } from "../i18n/shared";
 import { readJsonIfOk, readJsonOrThrow } from "../fetch-json";
-import { openBrowserRequestField } from "../oauth-open-browser-pref";
+import { openBrowserRequestField, readOpenBrowserPref } from "../oauth-open-browser-pref";
 import { startVisibilityPoll } from "../visibility-poll";
+
+/**
+ * How long the modal waits before giving up. The browser flow is bounded by
+ * the proxy's own callback server; the device grant lives 15 minutes and the
+ * user is expected to walk away, so it gets the grant's lifetime plus a small
+ * settlement margin for the token exchange and credential write that follow
+ * the final poll.
+ */
+const LOGIN_TIMEOUT_BROWSER_MS = 300_000;
+const LOGIN_TIMEOUT_DEVICE_MS = 960_000;
 import {
   codexAccountMutationCompletion,
   type CodexAccountMutationCompletion,
@@ -74,7 +84,9 @@ export function useAddCodexAccountOAuth({
     const flowId = flowRef.current;
     flowRef.current = null;
     dispatch({ type: "set-flow-id", flowId: null });
-    dispatch({ type: "set-auth-url", authUrl: "" });
+    // Clear the whole hint, not just the URL: leaving deviceCode behind would
+    // display an expired code next to the timeout error.
+    dispatch({ type: "set-login-hint", authUrl: "" });
     stopPolling();
     loginAbortRef.current?.abort();
     loginAbortRef.current = null;
@@ -134,12 +146,20 @@ export function useAddCodexAccountOAuth({
     pollErrorStreakRef.current = 0;
     try {
       const accountId = reauthAccountId ?? requestedId?.trim() ?? "";
+      // "Don't open a browser on the proxy machine" already means the operator
+      // is not sitting at the host — its own hint says "when the dashboard is
+      // not on the proxy's machine". That is exactly the case the device flow
+      // exists for, so it selects the device grant rather than handing the user
+      // a callback URL that only resolves on a machine they are not at (#3366).
+      // The preference is tri-state: unset stays on the browser flow.
+      const wantsDeviceFlow = readOpenBrowserPref() === false;
       const requestLogin = () => fetch(`${apiBase}/api/codex-auth/login`, {
         signal: controller.signal,
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           ...openBrowserRequestField(),
+          ...(wantsDeviceFlow ? { device: true } : {}),
           ...(reauthAccountId
             ? { id: reauthAccountId, reauth: true }
             : (accountId ? { id: accountId } : {})),
@@ -261,7 +281,10 @@ export function useAddCodexAccountOAuth({
               dispatch({ type: "set-error", error: t("modal.loginTimeout") });
             }
           }
-        }, 300_000);
+          // A device login is deliberately slow: the operator leaves this
+          // machine to enter the code elsewhere. Cancelling at five minutes
+          // would abort a grant that is still valid for ten more.
+        }, wantsDeviceFlow ? LOGIN_TIMEOUT_DEVICE_MS : LOGIN_TIMEOUT_BROWSER_MS);
       }
       if (data.error && !data.url) dispatch({ type: "set-error", error: data.error });
     } catch (e) {

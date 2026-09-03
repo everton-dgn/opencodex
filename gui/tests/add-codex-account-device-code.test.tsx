@@ -3,6 +3,7 @@ import { Window } from "happy-dom";
 import { act } from "react";
 import type { Root } from "react-dom/client";
 import { LanguageProvider } from "../src/i18n/provider";
+import { writeOpenBrowserPref } from "../src/oauth-open-browser-pref";
 import AddCodexAccountModal from "../src/components/AddCodexAccountModal";
 
 /**
@@ -23,6 +24,7 @@ let root: Root | null = null;
 let originalFetch: typeof globalThis.fetch;
 let statusHolders: Array<{ resolve: (value: Response) => void }> = [];
 let loginHolders: Array<{ resolve: () => void }> = [];
+let loginBodies: Array<Record<string, unknown>> = [];
 
 beforeEach(() => {
   previous = Object.fromEntries(globals.map((k) => [k, Reflect.get(globalThis, k)])) as typeof previous;
@@ -35,15 +37,24 @@ beforeEach(() => {
     localStorage: { configurable: true, value: win.localStorage },
   });
   (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  // "Don't open a browser on the proxy machine" is what selects the device
+  // grant: the operator is not sitting at the host.
+  writeOpenBrowserPref(false);
 
   originalFetch = globalThis.fetch;
   statusHolders = [];
   loginHolders = [];
+  loginBodies = [];
   Object.defineProperty(globalThis, "fetch", {
     configurable: true,
-    value: async (input: RequestInfo | URL) => {
+    value: async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = new URL(String(input), "http://localhost");
       if (url.pathname === "/api/codex-auth/login") {
+        loginBodies.push(
+          typeof init?.body === "string"
+            ? (JSON.parse(init.body) as Record<string, unknown>)
+            : {},
+        );
         return await new Promise<Response>((resolve) => {
           loginHolders.push({
             resolve: () => resolve(Response.json({
@@ -102,6 +113,10 @@ async function mountReauthModal() {
 test("a device login renders the short code, not just the verification URL", async () => {
   await mountReauthModal();
 
+  // Without this the test is false-green: the mock would answer with a device
+  // payload no matter what the GUI asked for.
+  expect(loginBodies[0]).toMatchObject({ device: true });
+
   // The code element is what LoginHint renders for a device flow; asserting on
   // it rather than raw text proves the field arrived rather than appearing
   // incidentally inside the instructions prose.
@@ -109,4 +124,12 @@ test("a device login renders the short code, not just the verification URL", asy
   expect(code).toBeTruthy();
   expect(code?.textContent).toBe(DEVICE_CODE);
   expect(host.textContent).toContain(DEVICE_URL);
+});
+
+test("the default browser flow does not ask for a device login", async () => {
+  // No preference expressed: the callback flow must stay the default.
+  window.localStorage.removeItem("ocx.oauth.openBrowser");
+  await mountReauthModal();
+
+  expect(loginBodies[0]?.device).toBeUndefined();
 });
