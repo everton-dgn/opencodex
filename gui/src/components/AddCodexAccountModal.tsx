@@ -63,6 +63,7 @@ export default function AddCodexAccountModal({
             error={ui.error}
             onIdChange={value => dispatch({ type: "set-id", id: value })}
             onStartOAuth={() => { void startOAuth(ui.id); }}
+            onStartDeviceOAuth={() => { void startOAuth(ui.id, { device: true }); }}
             onClose={closeModal}
           />
         )}

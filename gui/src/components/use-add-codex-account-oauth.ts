@@ -7,7 +7,7 @@ import type {
 } from "./add-codex-account-reducer";
 import type { TFn } from "../i18n/shared";
 import { readJsonIfOk, readJsonOrThrow } from "../fetch-json";
-import { openBrowserRequestField, readOpenBrowserPref } from "../oauth-open-browser-pref";
+import { openBrowserRequestField } from "../oauth-open-browser-pref";
 import { startVisibilityPoll } from "../visibility-poll";
 
 /**
@@ -135,7 +135,7 @@ export function useAddCodexAccountOAuth({
     onCloseRef.current();
   }, [ui.step, cancelLogin]);
 
-  const startOAuth = useCallback(async (requestedId?: string) => {
+  const startOAuth = useCallback(async (requestedId?: string, options?: { device?: boolean }) => {
     clearManualCode();
     flowRef.current = null;
     dispatch({ type: "set-flow-id", flowId: null });
@@ -146,13 +146,12 @@ export function useAddCodexAccountOAuth({
     pollErrorStreakRef.current = 0;
     try {
       const accountId = reauthAccountId ?? requestedId?.trim() ?? "";
-      // "Don't open a browser on the proxy machine" already means the operator
-      // is not sitting at the host — its own hint says "when the dashboard is
-      // not on the proxy's machine". That is exactly the case the device flow
-      // exists for, so it selects the device grant rather than handing the user
-      // a callback URL that only resolves on a machine they are not at (#3366).
-      // The preference is tri-state: unset stays on the browser flow.
-      const wantsDeviceFlow = readOpenBrowserPref() === false;
+      // An explicit choice from the modal, not an inference. "Don't open a
+      // browser on the proxy machine" was tempting to reuse, but it means
+      // "use a different browser", not "change authentication protocol" —
+      // reading it as a device-flow request would retarget a preference some
+      // users set for an unrelated reason (#3366).
+      const wantsDeviceFlow = options?.device === true;
       const requestLogin = () => fetch(`${apiBase}/api/codex-auth/login`, {
         signal: controller.signal,
         method: "POST",

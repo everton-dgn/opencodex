@@ -493,8 +493,10 @@ describe("account login --device", () => {
     const source = await Bun.file(new URL("../src/cli/account-auth.ts", import.meta.url)).text();
     const budget = /const maxAttempts = device \? (\d+) : (\d+);/.exec(source);
     expect(budget).toBeTruthy();
-    // 2s per attempt: the device budget must cover the 15-minute grant.
-    expect(Number(budget?.[1]) * 2).toBeGreaterThanOrEqual(900);
+    // 2s per attempt. 900s is the grant itself; the budget must also leave
+    // settlement margin for the token exchange after the final poll, so 450
+    // (exactly 900s) is a regression, not a pass.
+    expect(Number(budget?.[1]) * 2).toBeGreaterThanOrEqual(960);
     // The browser path is unchanged.
     expect(budget?.[2]).toBe("150");
   });

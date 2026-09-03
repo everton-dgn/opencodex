@@ -3,7 +3,6 @@ import { Window } from "happy-dom";
 import { act } from "react";
 import type { Root } from "react-dom/client";
 import { LanguageProvider } from "../src/i18n/provider";
-import { writeOpenBrowserPref } from "../src/oauth-open-browser-pref";
 import AddCodexAccountModal from "../src/components/AddCodexAccountModal";
 
 /**
@@ -37,9 +36,6 @@ beforeEach(() => {
     localStorage: { configurable: true, value: win.localStorage },
   });
   (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-  // "Don't open a browser on the proxy machine" is what selects the device
-  // grant: the operator is not sitting at the host.
-  writeOpenBrowserPref(false);
 
   originalFetch = globalThis.fetch;
   statusHolders = [];
@@ -93,16 +89,31 @@ afterEach(async () => {
   await win.happyDOM?.close?.();
 });
 
-async function mountReauthModal() {
+/**
+ * Mount the ADD flow (not reauth) so the pick step renders, then click the
+ * device-login row the way a user would. Preloading state would not prove the
+ * choice is reachable from the UI.
+ */
+async function mountAndChooseDeviceLogin(chooseDevice: boolean) {
   const { createRoot } = await import("react-dom/client");
   await act(async () => {
     root = createRoot(host);
     root.render(
       <LanguageProvider>
-        <AddCodexAccountModal apiBase="" onClose={() => {}} onAdded={() => {}} reauthAccountId="acct-1" />
+        <AddCodexAccountModal apiBase="" onClose={() => {}} onAdded={() => {}} />
       </LanguageProvider>,
     );
   });
+
+  const rows = Array.from(host.querySelectorAll("button.list-row"));
+  const label = chooseDevice ? "Device code login" : "OAuth Login";
+  const row = rows.find(el => el.textContent?.includes(label));
+  expect(row).toBeTruthy();
+  await act(async () => {
+    row?.dispatchEvent(new win.MouseEvent("click", { bubbles: true }));
+    await new Promise((r) => setTimeout(r, 0));
+  });
+
   await act(async () => {
     while (loginHolders.length === 0) await new Promise((r) => setTimeout(r, 0));
     for (const holder of loginHolders.splice(0)) holder.resolve();
@@ -111,7 +122,7 @@ async function mountReauthModal() {
 }
 
 test("a device login renders the short code, not just the verification URL", async () => {
-  await mountReauthModal();
+  await mountAndChooseDeviceLogin(true);
 
   // Without this the test is false-green: the mock would answer with a device
   // payload no matter what the GUI asked for.
@@ -127,9 +138,8 @@ test("a device login renders the short code, not just the verification URL", asy
 });
 
 test("the default browser flow does not ask for a device login", async () => {
-  // No preference expressed: the callback flow must stay the default.
-  window.localStorage.removeItem("ocx.oauth.openBrowser");
-  await mountReauthModal();
+  // Choosing the ordinary OAuth row must not silently switch protocols.
+  await mountAndChooseDeviceLogin(false);
 
   expect(loginBodies[0]?.device).toBeUndefined();
 });

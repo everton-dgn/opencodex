@@ -3724,7 +3724,9 @@ describe("codex-auth API", () => {
     const source = await Bun.file(new URL("../src/codex/auth-api.ts", import.meta.url)).text();
     const budget = /const pollAttempts = useDeviceFlow \? (\d+) : (\d+);/.exec(source);
     expect(budget).toBeTruthy();
-    expect(Number(budget?.[1]) * 2).toBeGreaterThanOrEqual(900);
+    // 900s is the grant; the extra margin covers post-grant settlement, so an
+    // exactly-900s budget (450 attempts) must fail this.
+    expect(Number(budget?.[1]) * 2).toBeGreaterThanOrEqual(960);
     expect(budget?.[2]).toBe("150");
   });
 
