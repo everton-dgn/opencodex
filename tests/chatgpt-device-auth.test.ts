@@ -100,11 +100,41 @@ describe("ChatGPT device auth", () => {
   });
 
   test.each([403, 404])("treats %i as pending and keeps polling", async status => {
+    // interval 0.0001s floors to the 1s minimum, so two pending polls would
+    // sleep two real seconds. Assert the wait instead of paying for it.
     const calls = routeFetch({ pendingPolls: 2, pendingStatus: status, interval: 0.001 });
+    const started = Date.now();
     const creds = await loginChatGPTDevice({});
 
     expect(calls.urls.filter(url => url === DEVICE_TOKEN)).toHaveLength(3);
     expect(creds.access).toBe("access-value");
+    // Two pending polls at the 1s floor: proves the interval is honored rather
+    // than collapsed to an immediate retry.
+    expect(Date.now() - started).toBeGreaterThanOrEqual(1_900);
+  });
+
+  test("does not accept a grant that arrives after the deadline", async () => {
+    const realNow = Date.now;
+    let clock = realNow();
+    Date.now = () => clock;
+    try {
+      globalThis.fetch = (async (input: RequestInfo | URL) => {
+        const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+        if (url === USERCODE) {
+          return jsonResponse({ device_auth_id: "auth-id-opaque", user_code: "ABCD-EFGH" });
+        }
+        if (url === DEVICE_TOKEN) {
+          // The poll itself outlives the 15-minute grant.
+          clock += 15 * 60 * 1000 + 1;
+          return jsonResponse({ authorization_code: "auth-code", code_verifier: "server-verifier" });
+        }
+        throw new Error("token exchange must not be reached");
+      }) as typeof fetch;
+
+      await expect(loginChatGPTDevice({})).rejects.toThrow("expired");
+    } finally {
+      Date.now = realNow;
+    }
   });
 
   test("accepts the upstream 'usercode' spelling", async () => {

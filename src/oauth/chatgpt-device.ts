@@ -134,6 +134,10 @@ async function pollForGrant(
       continue;
     }
     if (!response.ok) throw deviceError("poll", response.status);
+    // The deadline is checked again here, not only at the top of the loop: a
+    // single poll can itself outlive the grant, and accepting a code that
+    // expired mid-flight just moves the failure to the token exchange.
+    if (Date.now() >= deadline) break;
     const payload = (await response.json()) as Record<string, unknown>;
     const authorizationCode = nonEmptyString(payload.authorization_code);
     const codeVerifier = nonEmptyString(payload.code_verifier);
