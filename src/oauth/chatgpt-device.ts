@@ -25,6 +25,12 @@ export const DEVICE_VERIFICATION_URL = "https://auth.openai.com/codex/device";
 const DEVICE_FLOW_TTL_MS = 15 * 60 * 1000;
 const DEFAULT_POLL_INTERVAL_MS = 5_000;
 const MIN_POLL_INTERVAL_MS = 1_000;
+/**
+ * Above ~2^31 ms a timer overflows and fires immediately, which would turn a
+ * hostile or corrupt `interval` into a hot loop against an auth endpoint. The
+ * grant only lives 15 minutes, so anything longer is meaningless anyway.
+ */
+const MAX_POLL_INTERVAL_MS = DEVICE_FLOW_TTL_MS;
 
 /**
  * Upstream sends `interval` as a number in some responses and a string in
@@ -34,7 +40,8 @@ const MIN_POLL_INTERVAL_MS = 1_000;
 function normalizeIntervalMs(raw: unknown): number {
   const seconds = typeof raw === "number" ? raw : typeof raw === "string" ? Number(raw) : NaN;
   if (!Number.isFinite(seconds) || seconds <= 0) return DEFAULT_POLL_INTERVAL_MS;
-  return Math.max(MIN_POLL_INTERVAL_MS, Math.round(seconds * 1000));
+  const ms = Math.round(seconds * 1000);
+  return Math.min(MAX_POLL_INTERVAL_MS, Math.max(MIN_POLL_INTERVAL_MS, ms));
 }
 
 function nonEmptyString(value: unknown): string | undefined {
@@ -84,7 +91,9 @@ async function requestUserCode(signal?: AbortSignal): Promise<DeviceUserCode> {
   if (!response.ok) throw deviceError("request", response.status);
   const payload = (await response.json()) as Record<string, unknown>;
   const deviceAuthId = nonEmptyString(payload.device_auth_id);
-  const userCode = nonEmptyString(payload.user_code);
+  // Upstream accepts both spellings, so a response using the alias must not be
+  // rejected as malformed.
+  const userCode = nonEmptyString(payload.user_code) ?? nonEmptyString(payload.usercode);
   if (!deviceAuthId || !userCode) {
     throw new Error("ChatGPT device authorization response missing required fields");
   }
@@ -117,7 +126,11 @@ async function pollForGrant(
       signal,
     });
     if (response.status === 403 || response.status === 404) {
-      await sleep(device.intervalMs, signal);
+      // Cap the wait at the time actually left. Sleeping a full interval past
+      // the deadline is how a 15-minute grant turns into a 20-minute wait.
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) break;
+      await sleep(Math.min(device.intervalMs, remaining), signal);
       continue;
     }
     if (!response.ok) throw deviceError("poll", response.status);

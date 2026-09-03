@@ -52,7 +52,15 @@ export function extractEmail(idToken?: string, accessToken?: string): string | u
 
 export function credsFromToken(data: Record<string, unknown>): OAuthCredentials {
   const idToken = typeof data.id_token === "string" ? data.id_token : undefined;
-  const accessToken = data.access_token as string;
+  // This parses a response from an external boundary, so the access token is
+  // validated rather than cast. A 200 carrying no access_token would otherwise
+  // resolve a login as successful with an undefined credential, which then gets
+  // silently declined at persistence — a success message and no account.
+  const accessToken = typeof data.access_token === "string" && data.access_token.length > 0
+    ? data.access_token
+    : undefined;
+  if (!accessToken) throw new Error("ChatGPT token response missing access token");
+  const refreshToken = typeof data.refresh_token === "string" ? data.refresh_token : "";
   // ?? only guards null/undefined; NaN or a string expires_in would otherwise
   // produce a NaN expiry that never compares as expired, and a negative duration
   // would stamp an already-past expiry — both block refresh semantics.
@@ -66,7 +74,7 @@ export function credsFromToken(data: Record<string, unknown>): OAuthCredentials 
   const expires = Number.isFinite(computedExpires) ? computedExpires : Date.now() + 3600 * 1000;
   return {
     access: accessToken,
-    refresh: (data.refresh_token as string) ?? "",
+    refresh: refreshToken,
     expires,
     accountId: extractAccountId(idToken, accessToken),
     email: extractEmail(idToken, accessToken),

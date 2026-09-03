@@ -99,12 +99,52 @@ describe("ChatGPT device auth", () => {
     expect(JSON.stringify(seen)).not.toContain("auth-id-opaque");
   });
 
-  test("treats 403 and 404 as pending and keeps polling", async () => {
-    const calls = routeFetch({ pendingPolls: 2, pendingStatus: 404, interval: 0.001 });
+  test.each([403, 404])("treats %i as pending and keeps polling", async status => {
+    const calls = routeFetch({ pendingPolls: 2, pendingStatus: status, interval: 0.001 });
     const creds = await loginChatGPTDevice({});
 
     expect(calls.urls.filter(url => url === DEVICE_TOKEN)).toHaveLength(3);
     expect(creds.access).toBe("access-value");
+  });
+
+  test("accepts the upstream 'usercode' spelling", async () => {
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (url === USERCODE) {
+        return jsonResponse({ device_auth_id: "auth-id-opaque", usercode: "WXYZ-1234" });
+      }
+      if (url === DEVICE_TOKEN) {
+        return jsonResponse({ authorization_code: "auth-code", code_verifier: "server-verifier" });
+      }
+      return jsonResponse({ access_token: "access-value", expires_in: 3600 });
+    }) as typeof fetch;
+
+    let seen: { deviceCode?: string } | undefined;
+    await loginChatGPTDevice({ onAuth: info => { seen = info; } });
+    expect(seen?.deviceCode).toBe("WXYZ-1234");
+  });
+
+  test("coerces a string interval and clamps an overflowing one", async () => {
+    // A raw setTimeout above ~2^31 ms fires immediately, which would turn a
+    // corrupt interval into a hot loop against an auth endpoint.
+    const calls = routeFetch({ pendingPolls: 3, interval: "999999999" });
+    const started = Date.now();
+    const abort = new AbortController();
+    setTimeout(() => abort.abort("stop"), 60);
+
+    await loginChatGPTDevice({ signal: abort.signal }).catch(() => {});
+
+    expect(Date.now() - started).toBeLessThan(5_000);
+    // One poll, then a long clamped wait — not a spin.
+    expect(calls.urls.filter(url => url === DEVICE_TOKEN).length).toBeLessThanOrEqual(2);
+  });
+
+  test("rejects a token response with no access token", async () => {
+    routeFetch({ tokenBody: { refresh_token: "refresh-value", expires_in: 3600 } });
+
+    await expect(loginChatGPTDevice({})).rejects.toThrow(
+      "ChatGPT token response missing access token",
+    );
   });
 
   test("exchanges the server-issued grant at the device callback URI", async () => {
