@@ -80,6 +80,7 @@ export default function AddCodexAccountModal({
             statusTone={ui.statusTone}
             flowId={ui.flowId}
             error={ui.error}
+            onSwitchToDevice={() => { void startOAuth(ui.id, { device: true }); }}
             onManualCodeChange={value => dispatch({ type: "set-manual-code", manualCode: value })}
             onSubmitManualCode={() => { void submitManualCode(); }}
             onClose={closeModal}

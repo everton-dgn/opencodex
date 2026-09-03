@@ -51,14 +51,20 @@ beforeEach(() => {
             ? (JSON.parse(init.body) as Record<string, unknown>)
             : {},
         );
+        const askedForDevice = loginBodies[loginBodies.length - 1]?.device === true;
         return await new Promise<Response>((resolve) => {
           loginHolders.push({
-            resolve: () => resolve(Response.json({
-              url: DEVICE_URL,
-              flowId: "flow-device",
-              deviceCode: DEVICE_CODE,
-              instructions: `Enter code: ${DEVICE_CODE}`,
-            })),
+            // Answer the way the server does: a device code only comes back
+            // when a device login was actually requested. A mock that always
+            // returns one cannot tell a wired flow from an unwired one.
+            resolve: () => resolve(Response.json(askedForDevice
+              ? {
+                url: DEVICE_URL,
+                flowId: "flow-device",
+                deviceCode: DEVICE_CODE,
+                instructions: `Enter code: ${DEVICE_CODE}`,
+              }
+              : { url: "https://auth.openai.test/oauth/authorize", flowId: "flow-browser" })),
           });
         });
       }
@@ -142,4 +148,43 @@ test("the default browser flow does not ask for a device login", async () => {
   await mountAndChooseDeviceLogin(false);
 
   expect(loginBodies[0]?.device).toBeUndefined();
+});
+
+test("reauth can switch to the device flow from the waiting step", async () => {
+  // Reauth skips the pick step entirely and auto-starts the browser flow, so
+  // without a control here a headless operator could add an account but never
+  // re-authenticate one.
+  const { createRoot } = await import("react-dom/client");
+  await act(async () => {
+    root = createRoot(host);
+    root.render(
+      <LanguageProvider>
+        <AddCodexAccountModal apiBase="" onClose={() => {}} onAdded={() => {}} reauthAccountId="acct-1" />
+      </LanguageProvider>,
+    );
+  });
+  await act(async () => {
+    while (loginHolders.length === 0) await new Promise((r) => setTimeout(r, 0));
+    for (const holder of loginHolders.splice(0)) holder.resolve();
+    await new Promise((r) => setTimeout(r, 0));
+  });
+
+  // The automatic reauth start is the browser flow.
+  expect(loginBodies[0]?.device).toBeUndefined();
+
+  const button = Array.from(host.querySelectorAll("button"))
+    .find(el => el.textContent?.includes("Device code login"));
+  expect(button).toBeTruthy();
+  await act(async () => {
+    button?.dispatchEvent(new win.MouseEvent("click", { bubbles: true }));
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  await act(async () => {
+    while (loginHolders.length === 0) await new Promise((r) => setTimeout(r, 0));
+    for (const holder of loginHolders.splice(0)) holder.resolve();
+    await new Promise((r) => setTimeout(r, 0));
+  });
+
+  expect(loginBodies[1]).toMatchObject({ device: true, reauth: true, id: "acct-1" });
+  expect(host.querySelector(".login-hint-device-code")?.textContent).toBe(DEVICE_CODE);
 });
