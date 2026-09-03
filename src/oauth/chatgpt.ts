@@ -5,6 +5,10 @@ import { generatePKCE } from "./pkce";
 const CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
 const AUTH_URL = "https://auth.openai.com/oauth/authorize";
 const TOKEN_URL = "https://auth.openai.com/oauth/token";
+
+/** Shared with the deviceauth grant in `./chatgpt-device`: same public PKCE client. */
+export const CHATGPT_CLIENT_ID = CLIENT_ID;
+export const CHATGPT_TOKEN_URL = TOKEN_URL;
 const SCOPE = "openid profile email offline_access api.connectors.read api.connectors.invoke";
 const CALLBACK_PORT = 1455;
 const CALLBACK_PATH = "/auth/callback";
@@ -46,7 +50,7 @@ export function extractEmail(idToken?: string, accessToken?: string): string | u
   return undefined;
 }
 
-function credsFromToken(data: Record<string, unknown>): OAuthCredentials {
+export function credsFromToken(data: Record<string, unknown>): OAuthCredentials {
   const idToken = typeof data.id_token === "string" ? data.id_token : undefined;
   const accessToken = data.access_token as string;
   // ?? only guards null/undefined; NaN or a string expires_in would otherwise
@@ -135,7 +139,22 @@ function safeErrorDescription(resp: Response): Promise<string> {
   });
 }
 
-export async function loginChatGPT(ctrl: OAuthController, opts?: { forceLogin?: boolean }): Promise<OAuthCredentials> {
+/**
+ * How the user proves identity. `browser` runs the localhost:1455 callback flow;
+ * `device` runs the deviceauth grant, which needs no local browser or listener
+ * and is the only workable path on a headless or remote hub (#3366).
+ */
+export type ChatGPTLoginFlow = "browser" | "device";
+
+export async function loginChatGPT(
+  ctrl: OAuthController,
+  opts?: { forceLogin?: boolean; flow?: ChatGPTLoginFlow },
+): Promise<OAuthCredentials> {
+  if (opts?.flow === "device") {
+    // Imported lazily so the callback flow does not pay for a module it never uses.
+    const { loginChatGPTDevice } = await import("./chatgpt-device");
+    return loginChatGPTDevice(ctrl);
+  }
   const flow = new ChatGPTOAuthFlow(ctrl);
   if (opts?.forceLogin) flow.forceLogin = true;
   return flow.login();
