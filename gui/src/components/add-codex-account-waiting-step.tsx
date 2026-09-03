@@ -5,6 +5,8 @@ import type { StatusTone } from "./add-codex-account-reducer";
 export function AddCodexAccountWaitingStep({
   reauthAccountId,
   authUrl,
+  deviceCode,
+  instructions,
   manualCode,
   manualCodeBusy,
   manualCodeWaiting,
@@ -18,6 +20,9 @@ export function AddCodexAccountWaitingStep({
 }: {
   reauthAccountId?: string;
   authUrl: string;
+  /** Short human code when the login is a device flow; empty otherwise. */
+  deviceCode?: string;
+  instructions?: string;
   manualCode: string;
   manualCodeBusy: boolean;
   manualCodeWaiting: boolean;
@@ -36,7 +41,7 @@ export function AddCodexAccountWaitingStep({
       <h3 style={{ marginBottom: 4 }}>{reauthAccountId ? t("codexAuth.reauthenticate") : t("codexAuth.oauthLogin")}</h3>
       <p className="modal-desc">{t("codexAuth.oauthWaiting")}</p>
       <LoginHint
-        hint={{ url: authUrl }}
+        hint={{ url: authUrl, deviceCode, instructions }}
         paste={{
           value: manualCode,
           busy: manualCodeBusy,

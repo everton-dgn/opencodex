@@ -282,6 +282,21 @@ its model-catalog refresh remains pending, human output still exits successfully
 `ocx sync` recovery guidance on stderr. `--json` keeps stdout parseable and carries
 `catalogRefreshPending: true` in the completed login state without the human warning.
 
+`ocx account login openai --device` runs OpenAI's device-code login instead of the browser
+callback. Use it when the proxy host has no browser, or when nothing can reach its
+`localhost:1455` — a container, a VPS, or any hub reached over SSH:
+
+```bash
+ocx account login openai --device --no-wait --json
+# { "flow": "...", "url": "https://auth.openai.com/codex/device", "deviceCode": "ABCD-EFGH" }
+```
+
+Open that URL on any other machine, enter the short code, and the login completes. Without
+`--no-wait` the command polls until you finish; the device grant lives 15 minutes, and the
+command waits that long rather than the 5 minutes a browser login allows, because the point
+is that you walk away to another device. The flag is rejected for other providers, which
+either have their own device flow already or have none.
+
 ### `ocx account remove <provider> <id|main> --yes [--json]`
 
 This guarded, non-interactive deletion requires `--yes`. Before deleting, it verifies that the id

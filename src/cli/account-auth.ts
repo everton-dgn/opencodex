@@ -31,10 +31,15 @@ function writeStdoutFully(text: string): void {
 }
 
 const USAGE = `Usage:
-  ocx account login <provider> [--id <account-id>] [--reauth] [--code -] [--no-wait] [--json]
+  ocx account login <provider> [--id <account-id>] [--reauth] [--device] [--code -] [--no-wait] [--json]
   ocx account code <provider> [--flow <flow-id>] [--json]   (reads the code from stdin)
   ocx account cancel <provider> [--flow <flow-id>] [--json]
   ocx account reset-credits <account-id|main> [--consume --yes] [--json]
+
+--device runs the OpenAI device-code login instead of the browser callback: use
+it when the proxy has no browser or nothing can reach localhost:1455, such as a
+headless or remote hub. Enter the printed code at the printed URL from any other
+machine.
 
 The redirect URL or authorization code is a short-lived credential. Pipe it in
 rather than passing it as an argument, where it lands in shell history and is
@@ -86,10 +91,14 @@ async function login(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   const wantsJson = takeFlag(args, "--json");
   const noWait = takeFlag(args, "--no-wait");
   const reauth = takeFlag(args, "--reauth");
+  const device = takeFlag(args, "--device");
   const id = takeOption(args, "--id");
   const suppliedCode = takeOptionWithSyntax(args, "--code");
   if (!provider) throw new CliUsageError("provider is required", USAGE);
   rejectArgs(args, USAGE);
+  if (device && !CODEX_NAMES.has(provider)) {
+    throw new CliUsageError("--device is only supported for the openai provider", USAGE);
+  }
   // Only resolve when --code was actually given: a plain `ocx account login`
   // opens the browser flow and polls, and must not block on stdin.
   const code = await resolveCode(suppliedCode, deps, false);
@@ -97,13 +106,18 @@ async function login(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   if (CODEX_NAMES.has(provider)) {
     const start = await runtimeRequest<LoginStart>("/api/codex-auth/login", {
       method: "POST",
-      body: JSON.stringify({ ...(id ? { id } : {}), ...(reauth ? { reauth: true } : {}) }),
+      body: JSON.stringify({
+        ...(id ? { id } : {}),
+        ...(reauth ? { reauth: true } : {}),
+        ...(device ? { device: true } : {}),
+      }),
     }, deps);
     if (!wantsJson) {
       // One atomic pre-poll block, flushed synchronously so a piped parent
       // reads the URL before the polling window starts (#1007).
       const block = [
         start.url ? `Open this URL to sign in:\n${start.url}` : "",
+        start.deviceCode ? `Device code: ${start.deviceCode}` : "",
         start.instructions ?? "",
         start.flowId ? `Flow: ${start.flowId}` : "",
       ].filter(line => line !== "").join("\n");
@@ -120,7 +134,11 @@ async function login(argv: string[], deps: RuntimeApiDeps): Promise<void> {
       return;
     }
     if (!start.flowId) throw new CliUsageError("login did not return a flow id");
-    for (let attempt = 0; attempt < 150; attempt++) {
+    // A device login is deliberately slow: the user leaves this machine to
+    // enter the code elsewhere. Match the 15-minute grant instead of giving up
+    // at minute five while it is still valid.
+    const maxAttempts = device ? 450 : 150;
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
       await Bun.sleep(2_000);
       const state = await runtimeRequest<Record<string, unknown>>(
         `/api/codex-auth/login-status?flowId=${encodeURIComponent(start.flowId)}${id ? `&accountId=${encodeURIComponent(id)}` : ""}${reauth ? "&reauth=1" : ""}`,

@@ -3683,6 +3683,41 @@ describe("codex-auth API", () => {
     expect(data.status).toBe("expired");
   });
 
+  /**
+   * Device login (#3366): the route used to drop `deviceCode` and hand every
+   * non-empty URL to a local browser. On a headless hub that means no code to
+   * type and a browser spawn that cannot work.
+   */
+  test("POST /api/codex-auth/login with device:true returns the code and opens no browser", async () => {
+    const oauth = await import("../src/oauth");
+    const openUrlModule = await import("../src/lib/open-url");
+    const startSpy = spyOn(oauth, "startLoginFlow").mockImplementation(async () => ({
+      url: "https://auth.openai.com/codex/device",
+      instructions: "Enter code: ABCD-EFGH",
+      deviceCode: "ABCD-EFGH",
+    }));
+    const openSpy = spyOn(openUrlModule, "openUrl").mockImplementation(() => {});
+    try {
+      const req = new Request("http://localhost/api/codex-auth/login", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ device: true }),
+      });
+      const resp = await handleCodexAuthAPI(req, new URL(req.url), makeConfig());
+      const data = await resp!.json() as { deviceCode?: string; url?: string; flowId?: string };
+
+      expect(data.deviceCode).toBe("ABCD-EFGH");
+      expect(data.url).toBe("https://auth.openai.com/codex/device");
+      expect(data.flowId).toBeTruthy();
+      // The verification page belongs on the user's other device, not on the host.
+      expect(openSpy).not.toHaveBeenCalled();
+      expect(startSpy.mock.calls[0]?.[1]).toMatchObject({ flow: "device" });
+    } finally {
+      startSpy.mockRestore();
+      openSpy.mockRestore();
+    }
+  });
+
   test("Codex OAuth login responses project raw provider errors", async () => {
     const oauth = await import("../src/oauth");
     const startSpy = spyOn(oauth, "startLoginFlow").mockImplementation(async () => {

@@ -70,6 +70,8 @@ export default function AddCodexAccountModal({
           <AddCodexAccountWaitingStep
             reauthAccountId={reauthAccountId}
             authUrl={ui.authUrl}
+            deviceCode={ui.deviceCode}
+            instructions={ui.instructions}
             manualCode={ui.manualCode}
             manualCodeBusy={manualCodeBusy}
             manualCodeWaiting={manualCodeWaiting}

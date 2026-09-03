@@ -145,7 +145,14 @@ export function useAddCodexAccountOAuth({
             : (accountId ? { id: accountId } : {})),
         }),
       });
-      type LoginResponse = { url?: string; flowId?: string; error?: string; status?: string };
+      type LoginResponse = {
+        url?: string;
+        flowId?: string;
+        error?: string;
+        status?: string;
+        deviceCode?: string;
+        instructions?: string;
+      };
       let resp = await requestLogin();
       if (!aliveRef.current) return;
       if (resp.status === 409) {
@@ -167,7 +174,15 @@ export function useAddCodexAccountOAuth({
       if (data.url) {
         flowRef.current = data.flowId ?? null;
         dispatch({ type: "set-flow-id", flowId: data.flowId ?? null });
-        dispatch({ type: "set-auth-url", authUrl: data.url });
+        // Carry the device code and prose through: LoginHint already renders a
+        // copyable code, but the Codex modal used to pass only the URL, so a
+        // device login showed a page with no code to type (#3366).
+        dispatch({
+          type: "set-login-hint",
+          authUrl: data.url,
+          deviceCode: data.deviceCode,
+          instructions: data.instructions,
+        });
         dispatch({ type: "set-step", step: "oauth-waiting" });
         stopPolling();
         const fid = data.flowId ?? "";
