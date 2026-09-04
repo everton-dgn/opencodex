@@ -3826,7 +3826,7 @@ async function handleResponsesInner(
     // The guard needs a catalog to compare against, so it stands down when the request omits one.
     // An explicit empty catalog is still authoritative: it declares that no client tools may be
     // called. A passthrough request can legitimately omit `tools` entirely and still receive a call
-    // the client understands — `tests/github-copilot-stream-contract.test.ts` sends
+    // the client understands — `tests/providers/github-copilot/github-copilot-stream-contract.test.ts` sends
     // `{model, input, stream}` with no tools and Copilot answers with a `custom_tool_call` for
     // `apply_patch`. Policing an absent catalog truncates that turn. An unreadable body lands there
     // too because the proxy cannot establish the caller's declared authorization boundary.
@@ -4922,7 +4922,10 @@ async function handleResponsesInner(
       linkAbortSignal(upstream, turnAc.signal);
       registerTurn(turnAc, options.turnAdmissionLease);
       const inspectionConsumerOptions = {
-        clientGoneSignal: clientGone.signal,
+        // Request abort can reject the fetch body before the response cancel hook runs.
+        clientGoneSignal: options.abortSignal
+          ? AbortSignal.any([clientGone.signal, options.abortSignal])
+          : clientGone.signal,
         drainBounds: { ms: 15_000, bytes: 32 * 1024 * 1024 },
         upstream,
         pinCompletedResponseIdToFirstSeen: githubCopilotRepairEnabled,
