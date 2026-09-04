@@ -845,10 +845,10 @@ describe("provider registry parity", () => {
     const minimax = PROVIDER_REGISTRY.find(entry => entry.id === "minimax");
     const seed = {
       ...providerConfigSeed(minimax!),
-      modelContextWindows: { "MiniMax-M3": 204_800 },
+      modelContextWindows: { "claude-fable-5": 1_000_000 },
     };
     const model = applyProviderConfigHints("minimax", seed, {
-      id: "MiniMax-M3-1",
+      id: "claude-fable-5-2",
       provider: "minimax",
     });
 
