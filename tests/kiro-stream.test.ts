@@ -1712,7 +1712,11 @@ describe("kiro adapter — parseStream", () => {
 
     resetKiroCalibration();
     const originalFetch = globalThis.fetch;
-    globalThis.fetch = (async () => new Response(streamOf(eventFrame({ content: "Final from fallback." })))) as typeof fetch;
+    let fallbackCalls = 0;
+    globalThis.fetch = (async () => {
+      fallbackCalls++;
+      return new Response(streamOf(eventFrame({ content: "Final from fallback." })));
+    }) as typeof fetch;
     try {
       const falling = createKiroAdapter(provider);
       await falling.buildRequest(sameConversation([bashTool]));
@@ -1722,6 +1726,7 @@ describe("kiro adapter — parseStream", () => {
         eventFrame({ content: "I am checking." }),
         eventFrame({ contextUsagePercentage: 10 }),
       ))));
+      expect(fallbackCalls).toBe(1);
     } finally {
       globalThis.fetch = originalFetch;
     }
