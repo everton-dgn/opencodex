@@ -9,11 +9,12 @@ Code 可以使用每一個已路由的供應商——包括 OAuth 登入、帳�
 
 ## Claude OAuth 帳號池（實驗性）
 
-你可以透過 Providers 儀表板登入多個 Claude 帳號（`ocx login anthropic` / add-account）。預設
-每個請求只使用**作用中**帳號。
+你可以透過 Providers 儀表板登入多個 Claude 帳號（`ocx login anthropic` / add-account）。只有一個
+合格帳號時，每個請求都使用該作用中帳號；有兩個以上帳號時，即使主動帳號池已關閉，上游 429
+仍可能改用另一個帳號重試。
 
 **實驗性、opt-in** 的 Claude 帳號池（`anthropicAccountPool.enabled`）會在這些 OAuth 帳號之間加入
-sticky session affinity 與 429 冷卻故障轉移。僅對**新**工作階段，`anthropicAccountPool.strategy`
+主動 sticky session affinity 與新工作階段選擇。僅對**新**工作階段，`anthropicAccountPool.strategy`
 會在合格帳號之間選擇：`quota`（預設）在用量高於 `autoSwitchThreshold` 時，依
 `anthropicAccountPool.quotaWindow` 所設定的視窗挑選已知用量最低者（`five-hour` 為預設，亦可選
 `weekly` 或 `max-utilization`）；
@@ -21,15 +22,17 @@ sticky session affinity 與 429 冷卻故障轉移。僅對**新**工作階段�
 或達到閾值，然後前進。它**預設關閉**、會在 GUI 顯示警告，而且尚未經過實戰驗證——Anthropic 可能
 限制看起來像自動輪換的帳號；輪換並不能保護你免受供應商執行機制的處置。
 
-啟用時的營運契約：
+有兩個以上合格帳號時的反應式復原：
 
-- 上游 **429** 會讓該帳號冷卻（有 `Retry-After` 時使用它，否則用預設 backoff）、清除其 affinity，
-  並可能在同一個請求內輪換到另一個合格帳號（有上限）。
+- 上游 **429** 會讓該帳號冷卻（有 `Retry-After` 時使用它，否則用預設 backoff），
+  並可能在同一個請求內輪換到另一個合格帳號（有上限）。即使 `anthropicAccountPool.enabled` 不存在
+  或為 `false`，此行為仍會運作；如果不接受自動帳號切換，請只保留一個合格帳號。
+- 主動帳號池啟用時，429 也會清除該帳號的 affinity。
 - Affinity 是**程序本機**的（proxy 重啟後就會遺失）。
 - **401/403** 憑證失敗會隔離該帳號（`needsReauth`），直到重新認證前都不會參與選擇。
 - 如果每個合格帳號都在冷卻，proxy 會回傳 **429**（不是 401），並在已知時附上 `Retry-After`。
-- 復原（包括 429 容錯移轉）會使用 `quotaWindow` 為合格的替代帳號排序，且不改變現有的冷卻或
-  容錯移轉上限；`round-robin` 會忽略 `quotaWindow`。
+- 主動帳號池關閉時，復原使用 quota 排序；啟用時則由帳號池策略選擇合格替代帳號，
+  `round-robin` 會忽略 `quotaWindow`。
 
 請見 [Configuration](/zh-tw/reference/configuration/#anthropicaccountpool-experimental)。
 

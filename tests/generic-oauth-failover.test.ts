@@ -12,7 +12,7 @@ import {
   preferredInitialAccount,
   rotateGenericOAuthAccountOn429,
 } from "../src/oauth/generic-account-failover";
-import { getAccountSet, markAccountNeedsReauth, saveCredential } from "../src/oauth/store";
+import { getAccountSet, markAccountNeedsReauth, saveCredential, setActiveAccount } from "../src/oauth/store";
 import { clearAccountQuotaCache, setCachedProviderAccountQuotaForTests } from "../src/providers/quota";
 import { resolveCopilotApiBaseUrl } from "../src/oauth/github-copilot";
 import { resolveProviderTransport } from "../src/providers/xai-transport";
@@ -134,6 +134,16 @@ describe("#2568 generic OAuth account failover", () => {
     setCachedProviderAccountQuotaForTests("xai", ids[1]!, { fiveHourPercent: 1 });
     expect(preferredInitialAccount(config(false), "xai")).toBeNull();
     expect(preferredInitialAccount(config(true, false), "xai")).toBeNull();
+  });
+
+  test("a provider-level true overrides a global proactive opt-out", async () => {
+    const ids = await seed(2);
+    await setActiveAccount("xai", ids[0]!);
+    clearGenericFailoverHealth("xai");
+    setCachedProviderAccountQuotaForTests("xai", ids[0]!, { fiveHourPercent: 99 });
+    setCachedProviderAccountQuotaForTests("xai", ids[1]!, { fiveHourPercent: 1 });
+
+    expect(preferredInitialAccount(config(false, true), "xai")).toBe(ids[1]);
   });
 
   test("a second account flagged for reauth is not a quorum", async () => {
@@ -288,7 +298,7 @@ describe("sidecar on429 wiring", () => {
     // Kiro's routing metadata) live in exactly one place. A fourth rotation site that swaps the
     // bearer by hand would reintroduce the mixed-identity bug this helper exists to prevent.
     const snapshotUses = coreSource.match(/failoverAccountSnapshot\(/g) ?? [];
-    const helperUses = coreSource.match(/applyFailoverSnapshot\(snapshot\)/g) ?? [];
+    const helperUses = coreSource.match(/applyFailoverSnapshot\(snapshot(?:, nextParsed)?\)/g) ?? [];
     // Four since the continuation loop gained its own generic-OAuth arm: the streaming loop grew
     // one with #2568 and the continuation loop did not, so an xAI/Cursor continuation 429 stayed
     // terminal. Bumping this count is the deliberate act of admitting a fourth rotation site --
@@ -326,6 +336,7 @@ describe("sidecar on429 wiring", () => {
 
     // Kiro routing metadata still travels with its own token.
     expect(body).toContain("_kiroAuthContext");
+    expect(coreSource).toContain("applyFailoverSnapshot(snapshot, nextParsed)");
   });
 
   test("pre-dispatch selection replaces the CCA project instead of inheriting one", () => {

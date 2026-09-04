@@ -352,7 +352,7 @@ rotation may trigger provider restrictions.
 
 | Key | Type | Default | Description |
 | --- | --- | --- | --- |
-| `anthropicAccountPool.enabled?` | `boolean` | `false` | Enable sticky affinity and 429 cooldown failover. |
+| `anthropicAccountPool.enabled?` | `boolean` | `false` | Enable proactive sticky affinity and new-session selection. With 2+ eligible accounts, reactive 429 cooldown/failover remains presence-driven even when this is `false`. |
 | `anthropicAccountPool.autoSwitchThreshold?` | `number` | `80` | For new sessions, when the active account reaches this threshold, choose the lowest known cached usage in the configured window; the account chosen does not itself have to be at or above the threshold. `0` disables **proactive** usage-based switching only — new-session selection and routing recovery after an eligible 429 still consult `quotaWindow`. |
 | `anthropicAccountPool.strategy?` | `"quota" \| "round-robin" \| "fill-first"` | `"quota"` | New-session strategy; `quota` ranks accounts by the window set by `quotaWindow`, and `fill-first` evaluates its drain threshold in that same window. |
 | `anthropicAccountPool.quotaWindow?` | `"five-hour" \| "weekly" \| "max-utilization"` | `"five-hour"` | The cached provider-reported utilization bar used for usage-aware account selection. `five-hour` keeps the original behavior. `weekly` scores the weekly bar and skips accounts whose 5-hour bar is exhausted while another eligible account remains, but falls back to exhausted candidates when none do. `max-utilization` scores the highest known bar, so it can use 5-hour usage before weekly usage is available; if neither is known, the account follows unknown-usage ordering. Known usage ranks before unknown usage under the opt-in `weekly` and `max-utilization` windows only; an omitted or explicit `five-hour` preserves the legacy ordering. If every eligible account is unknown, selection still returns one in eligible order. After the documented lower-5-hour tie-break, exact ties preserve eligible order. A healthy affinity-bound session is not proactively rebalanced. For new-session assignment and routing recovery after an eligible 429 replacement, `quota` ranks eligible candidates directly with this window; `fill-first` advances in stable order using this window's threshold and exhaustion rules; `round-robin` ignores it. Cooldown, failover limits, and reauthentication eligibility remain separate local state. Per-account weekly bars are only known once the dashboard Providers page has polled them. |
@@ -381,12 +381,12 @@ behaves exactly as before.
 
 | Key | Type | Default | Description |
 | --- | --- | --- | --- |
-| `oauthAccountFailover.enabled?` | `boolean` | presence-driven | Global override. `false` forces single-account behaviour everywhere; `true` forces rotation on. |
-| `providers.<name>.oauthAccountFailover.enabled?` | `boolean` | inherits | Per-provider override; beats the global setting and beats account presence. |
+| `oauthAccountFailover.enabled?` | `boolean` | presence-driven | Global control for proactive pre-dispatch preference. `false` disables that preference but does not disable reactive 429 rotation. |
+| `providers.<name>.oauthAccountFailover.enabled?` | `boolean` | inherits | Per-provider proactive override; beats the global setting. It does not disable presence-driven reactive 429 rotation. |
 | `providers.<name>.oauthAccountFailover.strategy?` | `"quota" \| "round-robin" \| "fill-first"` | — | Declared pool strategy for a generic OAuth provider (#695). Persisted through `ocx account strategy <provider> <name>` or `PUT /api/oauth/accounts/pool`; the generic selector does not act on it yet, so omitted and set behave the same today. |
 | `providers.<name>.oauthAccountFailover.autoSwitchThreshold?` | `number` | — | Declared 0–100 usage percent for a proactive switch on a generic OAuth provider (#695). Set with `ocx account auto-switch <provider> threshold <n>`; inert until the selector consumes it. |
 
-To keep strict single-account behaviour for one provider whose terms you would rather not test:
+To disable proactive pre-dispatch preference for one provider while retaining reactive 429 recovery:
 
 ```json
 {
@@ -398,7 +398,8 @@ To keep strict single-account behaviour for one provider whose terms you would r
 }
 ```
 
-That setting survives logging in, adding an account, and reauthenticating.
+That setting survives logging in, adding an account, and reauthenticating. To prevent any automatic
+account switch, keep only one eligible account for that provider.
 
 Generic OAuth providers (Google Antigravity, xAI, Cursor, Kimi, GitHub Copilot, Nous, and any
 other OAuth provider outside the Codex and Anthropic pools) also accept `strategy` and
@@ -425,9 +426,9 @@ Rotation carries the alternate account's **full** credential snapshot, not just 
 provider that pairs routing metadata with its token — Antigravity's Cloud Code Assist project id,
 for example — cannot end up sending one account's token with another account's metadata.
 
-Current scope is the ordinary Responses request paths. Cursor reports rate limits as adapter
-events rather than an HTTP status, and the standalone Antigravity image endpoint has its own
-request path; neither rotates yet.
+Current scope covers the ordinary Responses request paths, pre-output Cursor adapter-event 429s,
+terminal continuations, and the shared web-search/image sidecar retry hook. A failure after client
+output has started remains terminal because replaying it would duplicate visible output or effects.
 
 :::caution[Experimental]
 Rotating across subscription accounts spends a second account's quota and may violate some

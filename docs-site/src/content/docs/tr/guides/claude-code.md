@@ -11,12 +11,13 @@ anahtar yük devretme ve sidecar'lar dahil — kullanabilir.
 ## Claude OAuth hesap havuzu (deneysel)
 
 Sağlayıcılar kontrol panelinden (`ocx login anthropic` / hesap ekle) birden
-fazla Claude hesabına giriş yapabilirsiniz. Varsayılan olarak her istek yalnızca
-**aktif** hesabı kullanır.
+fazla Claude hesabına giriş yapabilirsiniz. Tek uygun hesap varsa her istek aktif
+hesabı kullanır. İki veya daha fazla hesap varsa proaktif havuz kapalıyken bile
+yukarı akış 429 yanıtı isteği başka bir hesapla yeniden deneyebilir.
 
 **Deneysel, isteğe bağlı** bir Claude hesap havuzu
-(`anthropicAccountPool.enabled`), bu OAuth hesapları arasında yapışkan oturum
-bağlılığı ve 429 bekleme süresi (cooldown) yük devretmesi ekler. Yalnızca
+(`anthropicAccountPool.enabled`), bu OAuth hesapları arasında proaktif yapışkan
+oturum bağlılığı ve yeni oturum seçimi ekler. Yalnızca
 **yeni** oturumlar için `anthropicAccountPool.strategy` uygun hesaplar arasından
 seçim yapar: `quota` (varsayılan), `autoSwitchThreshold` üzerinde olduğunda
 `anthropicAccountPool.quotaWindow` ile yapılandırılan penceredeki bilinen en düşük kullanımı
@@ -27,20 +28,22 @@ olarak kapalıdır**, bir GUI uyarısı gösterir ve sahada kapsamlı olarak tes
 edilmemiştir — Anthropic otomatik rotasyona benzeyen hesapları kısıtlayabilir;
 rotasyon sağlayıcı yaptırımlarına karşı koruma sağlamaz.
 
-Etkinleştirildiğinde operasyonel sözleşme:
+İki veya daha fazla uygun hesapla tepkisel kurtarma:
 
 - Yukarı akıştan gelen **429**, varsa `Retry-After` (yoksa varsayılan bir geri
-  çekilme) kullanarak o hesabı soğutur, bağlılıklarını temizler ve aynı istek
-  içinde uygun başka bir hesaba dönebilir (sınırlı).
+  çekilme) kullanarak o hesabı soğutur ve aynı istek içinde uygun başka bir
+  hesaba dönebilir (sınırlı). Bu davranış `anthropicAccountPool.enabled` yokken
+  veya `false` iken de etkindir. Otomatik hesap geçişini kabul etmiyorsanız
+  yalnızca bir uygun hesap bırakın.
+- Proaktif havuz etkinse 429, o hesabın oturum bağlılığını da temizler.
 - Bağlılık **işleme özeldir (process-local)** (proxy yeniden başlatıldığında
   kaybolur).
 - **401/403** kimlik bilgisi hataları hesabı karantinaya alır (`needsReauth`),
   böylece yeniden kimlik doğrulanana kadar seçimden hariç tutulur.
 - Uygun tüm hesaplar soğutuluyorsa, proxy bilindiğinde `Retry-After` ile
   birlikte **429** (401 değil) döndürür.
-- 429 yük devretmesi dahil kurtarma, mevcut soğuma ve yük devretme sınırlarını
-  değiştirmeden uygun yedek hesapları sıralamak için `quotaWindow` kullanır;
-  `round-robin` ise `quotaWindow` ayarını yok sayar.
+- Proaktif havuz kapalıyken kurtarma kota sırasını kullanır. Etkinken uygun
+  yedekleri havuz stratejisi seçer; `round-robin` `quotaWindow` ayarını yok sayar.
 
 Bkz.
 [Yapılandırma](/tr/reference/configuration/#anthropicaccountpool-experimental).

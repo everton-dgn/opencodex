@@ -10,10 +10,11 @@ clé et les services auxiliaires, sans configuration d'authentification supplém
 ## Groupe de comptes OAuth Claude (expérimental)
 
 Vous pouvez vous connecter à plusieurs comptes Claude via le tableau de bord des fournisseurs (`ocx login anthropic` /
-ajouter un compte). Par défaut, chaque requête utilise uniquement le compte **actif**.
+ajouter un compte). Avec un seul compte éligible, chaque requête utilise ce compte actif. Avec au moins deux comptes,
+une erreur 429 en amont peut relancer la requête sur un autre compte même si le routage proactif est désactivé.
 
 Un groupe de comptes Claude **expérimental et facultatif** (`anthropicAccountPool.enabled`) ajoute l'affinité de
-session et le basculement en cas de délai de récupération 429 entre ces comptes OAuth. Pour les **nouvelles**
+session proactive et la sélection des nouvelles sessions entre ces comptes OAuth. Pour les **nouvelles**
 sessions uniquement, `anthropicAccountPool.strategy` sélectionne un compte éligible : `quota` (par défaut)
 choisit la plus faible utilisation connue dans la fenêtre configurée par `anthropicAccountPool.quotaWindow`
 (`five-hour` par défaut, `weekly` ou `max-utilization`) lorsqu'elle dépasse `autoSwitchThreshold` ; `round-robin`
@@ -23,18 +24,20 @@ un délai de récupération, une réauthentification ou le seuil, puis passe au 
 Anthropic peut restreindre les comptes dont l'activité ressemble à une rotation automatisée ; la rotation ne
 protège pas contre l'application des règles du fournisseur.
 
-Comportement lorsque cette option est activée :
+Récupération réactive avec au moins deux comptes éligibles :
 
 - Un **429** en amont place le compte en temporisation selon `Retry-After` lorsqu'il est présent, ou selon un délai de repli,
-  efface ses affinités et peut faire basculer la requête vers un autre compte admissible, dans les limites prévues.
+  et peut faire basculer la requête vers un autre compte admissible, dans les limites prévues. Cette récupération reste active
+  lorsque `anthropicAccountPool.enabled` est absent ou vaut `false`. Ne conservez qu'un compte éligible si vous refusez tout
+  changement automatique de compte.
+- Lorsque le routage proactif est activé, un 429 efface aussi l'affinité de ce compte.
 - L'affinité est **locale au processus** et disparaît au redémarrage du proxy.
 - Les erreurs d'identification **401/403** mettent le compte en quarantaine (`needsReauth`) afin de l'exclure de la
   sélection jusqu'à sa réauthentification.
 - Si chaque compte éligible est en temporisation, le proxy renvoie **429** (et non 401) avec `Retry-After`
   lorsqu'il est connu.
-- La récupération, y compris le basculement 429, utilise `quotaWindow` pour classer les comptes de
-  remplacement admissibles, sans modifier les limites existantes de temporisation ou de basculement ;
-  `round-robin` ignore `quotaWindow`.
+- Lorsque le routage proactif est désactivé, la récupération utilise l'ordre du quota. Lorsqu'il est activé,
+  la stratégie du groupe choisit les remplacements admissibles ; `round-robin` ignore `quotaWindow`.
 
 Voir [Configuration](/fr/reference/configuration/providers/#anthropicaccountpool-expérimental).
 

@@ -10,10 +10,11 @@ included — with zero extra auth work.
 ## Claude OAuth account pool (experimental)
 
 You can log in multiple Claude accounts via the Providers dashboard (`ocx login anthropic` /
-add-account). By default every request uses the **active** account only.
+add-account). With one eligible account, every request uses that active account. With two or more,
+an upstream 429 may retry another account even while proactive pooling is disabled.
 
-An **experimental, opt-in** Claude account pool (`anthropicAccountPool.enabled`) adds sticky
-session affinity and 429 cooldown failover across those OAuth accounts. For **new** sessions,
+An **experimental, opt-in** Claude account pool (`anthropicAccountPool.enabled`) adds proactive
+sticky session affinity and new-session selection across those OAuth accounts. For **new** sessions,
 `anthropicAccountPool.strategy` selects among eligible accounts: `quota` (default) picks the
 lowest known usage in the window set by `quotaWindow` (`five-hour` by default, or `weekly` /
 `max-utilization`) when above `autoSwitchThreshold`; `round-robin` spreads evenly
@@ -22,18 +23,20 @@ reauthentication, or threshold, then advances. It is **off by default**, shows a
 and is not battle-tested — Anthropic may restrict accounts that look like automated rotation;
 rotation does not protect against provider enforcement.
 
-Operational contract when enabled:
+Reactive recovery with two or more eligible accounts:
 
 - Upstream **429** cools that account using `Retry-After` when present (else a default backoff),
-  clears its affinities, and may rotate to another eligible account within the same request
-  (bounded).
+  and may rotate to another eligible account within the same request (bounded). This remains active
+  when `anthropicAccountPool.enabled` is absent or `false`; keep one eligible account if you do not
+  accept automatic account switching.
+- When proactive pooling is enabled, a 429 also clears that account's affinity.
 - Affinity is **process-local** (lost on proxy restart).
 - **401/403** credential failures quarantine the account (`needsReauth`) so it is excluded from
   selection until re-authenticated.
 - If every eligible account is cooling, the proxy returns **429** (not 401) with `Retry-After`
   when known.
-- Recovery, including 429 failover, uses `quotaWindow` to rank eligible replacements without
-  changing the existing cooldown or failover limits; `round-robin` ignores `quotaWindow`.
+- Recovery uses quota ordering while proactive pooling is disabled. When it is enabled, the chosen
+  pool strategy governs eligible replacements; `round-robin` ignores `quotaWindow`.
 - `autoSwitchThreshold: 0` turns off **proactive** usage-based switching only. New-session
   selection and 429 recovery still consult `quotaWindow`, so the window is inert only under
   `round-robin`. `fill-first` evaluates its drain threshold in the selected window.
