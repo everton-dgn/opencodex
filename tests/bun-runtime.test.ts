@@ -237,6 +237,7 @@ describe("withProcessRuntimeProvenance (execPath relaunch paths)", () => {
     // provenance again, so the launch sites are pinned here rather than left to review.
     const launchers = [
       "src/cli/index.ts",
+      "src/cli/claude.ts",
       "src/cli/opencode.ts",
       "src/server/management/system-restart.ts",
       "src/update/index.ts",

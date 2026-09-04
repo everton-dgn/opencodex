@@ -3,6 +3,7 @@ import {
   buildClaudeEnv,
   buildNativeClaudeEnv,
   claudeLaunchPlan,
+  claudeLaunchPreflight,
   claudeNotFoundHint,
   ensureProxyForClaude,
   isProxyOnlyModelId,
@@ -37,7 +38,7 @@ const AUTH_PRESENT = {
 };
 
 describe("ocx claude proxy liveness", () => {
-  test("retries the liveness probe without starting a proxy", async () => {
+  test("retries the initial liveness probe before spawning a proxy", async () => {
     const seen: (number | undefined)[] = [];
     const findLiveProxy = async (io?: LivenessIo): Promise<LiveProxy> => {
       seen.push(io?.attempts);
@@ -48,26 +49,29 @@ describe("ocx claude proxy liveness", () => {
     expect(await ensureProxyForClaude({ findLiveProxy })).toBe(10100);
     expect(seen).toEqual([3]);
   });
-
-  test("returns null when no proxy is live", async () => {
-    const seen: (number | undefined)[] = [];
-    const findLiveProxy = async (io?: LivenessIo): Promise<null> => {
-      seen.push(io?.attempts);
-      return null;
-    };
-
-    expect(await ensureProxyForClaude({ findLiveProxy })).toBeNull();
-    expect(seen).toEqual([3]);
-  });
 });
 
 describe("ocx claude native fallback", () => {
-  test("routes only through a live proxy whose Claude route is enabled", () => {
-    expect(claudeLaunchPlan(true, true, true)).toEqual({ kind: "routed" });
-    expect(claudeLaunchPlan(true, true, undefined)).toEqual({ kind: "routed" });
-    expect(claudeLaunchPlan(false, true, undefined)).toMatchObject({ kind: "native" });
-    expect(claudeLaunchPlan(true, false, true)).toMatchObject({ kind: "native" });
-    expect(claudeLaunchPlan(true, true, false)).toMatchObject({ kind: "native" });
+  test("routes unless configured or live Claude routing is explicitly disabled", () => {
+    expect(claudeLaunchPlan(true, true)).toEqual({ kind: "routed" });
+    expect(claudeLaunchPlan(true, undefined)).toEqual({ kind: "routed" });
+    expect(claudeLaunchPlan(false, true)).toMatchObject({ kind: "native" });
+    expect(claudeLaunchPlan(true, false)).toMatchObject({ kind: "native" });
+  });
+
+  test("rejects an invalid connected client before configuration-disabled fallback", () => {
+    expect(claudeLaunchPreflight(false, { kind: "invalid", reason: "bad client state" }))
+      .toEqual({ kind: "error", message: "Client state is invalid: bad client state" });
+    expect(claudeLaunchPreflight(false, {
+      kind: "connected",
+      value: {
+        serverUrl: "https://hub.example.test",
+        apiKeyId: "remote",
+        tokenFingerprint: "expected",
+        selectedClients: ["claude"],
+      },
+    }, { kind: "present", token: "secret", fingerprint: "changed" }))
+      .toEqual({ kind: "error", message: "Connected service token ownership changed." });
   });
 
   test("removes proxy-owned state while preserving user credentials and native model ids", () => {
@@ -100,6 +104,20 @@ describe("ocx claude native fallback", () => {
     expect(env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST).toBeUndefined();
     expect(env.CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY).toBeUndefined();
     expect(env.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBeUndefined();
+  });
+
+  test("preserves an unrelated loopback gateway and its user credential", () => {
+    for (const baseUrl of ["http://localhost:8080", "http://127.0.0.1:10100"]) {
+      const env = buildNativeClaudeEnv(cfg({ port: 10100 }), {
+        ANTHROPIC_BASE_URL: baseUrl,
+        ANTHROPIC_API_KEY: "sk-ant-user-key",
+      }, {
+        preBunAnthropicSlots: ["ANTHROPIC_BASE_URL", "ANTHROPIC_API_KEY"],
+      });
+
+      expect(env.ANTHROPIC_BASE_URL).toBe(baseUrl);
+      expect(env.ANTHROPIC_API_KEY).toBe("sk-ant-user-key");
+    }
   });
 
   test("keeps unrelated slash model ids and recognizes configured provider routes", () => {

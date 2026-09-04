@@ -1,10 +1,10 @@
 /**
- * `ocx claude [claude args...]` — launch Claude Code through a live local proxy,
- * or natively when routing is unavailable or disabled.
+ * `ocx claude [claude args...]` — launch Claude Code through the local proxy,
+ * or natively when Claude routing is explicitly disabled.
  *
  * Mirrors `ccr code` UX (devlog/260711_claude_inbound/020, 003 E1/E2/E5/G1):
- * injects the Anthropic env slots, then execs the `claude` CLI with stdio inherited.
- * The launcher never starts the service. User-exported env wins except when a stale
+ * ensures the proxy is running, injects the Anthropic env slots, then execs the
+ * `claude` CLI with stdio inherited. User-exported env wins except when a stale
  * loopback opencodex base URL points at a different proxy port.
  */
 import { spawn } from "node:child_process";
@@ -20,9 +20,11 @@ import type { OcxConfig } from "../types";
 import { configuredAdminToken } from "../lib/admin-secrets";
 import { PROXY_MARKER, ownAdmissionTokens, defaultAuthDetectDeps, detectClaudeAuth, type AuthDetectDeps } from "../claude/auth-detect";
 import { resolveClaudeAuthMode } from "../claude/auth-mode";
+import { withProcessRuntimeProvenance } from "../lib/bun-runtime";
+import { selfLaunchArgv } from "../lib/self-launch-argv";
 import { ANTHROPIC_PARENT_ENV_SLOTS, trustedNodeLauncherContext, type AnthropicParentEnvSlot } from "./launcher-context";
-import { readClientConnectionState } from "../client/state";
-import { readServiceApiTokenState } from "../lib/service-secrets";
+import { readClientConnectionState, type ClientConnectionState } from "../client/state";
+import { readServiceApiTokenState, type ServiceApiTokenState } from "../lib/service-secrets";
 import { DEFAULT_CATALOG_PATH } from "../codex/paths";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -384,15 +386,27 @@ export type ClaudeProxyEnsureDeps = {
 };
 
 export async function ensureProxyForClaude(deps: ClaudeProxyEnsureDeps = {}): Promise<number | null> {
-  // Retry the read-only probe because a proxy that has only just bound can miss one
-  // attempt while its event loop is still settling startup work. This launcher never
-  // starts the service: service lifecycle stays under explicit operator control.
+  // A proxy that has only just bound can miss a single probe while its event loop
+  // is still settling startup work. Retry before spawning to avoid a second proxy.
   const live = await (deps.findLiveProxy ?? findLiveProxy)({ attempts: 3 });
-  return live?.port ?? null;
+  if (live) return live.port;
+  const cfgPort = loadConfig().port;
+  const pinPort = typeof cfgPort === "number" && cfgPort > 0 ? cfgPort : 10100;
+  const child = spawn(process.execPath, selfLaunchArgv(["start", "--port", String(pinPort)]), {
+    detached: true,
+    stdio: "ignore",
+    windowsHide: true,
+    env: withProcessRuntimeProvenance({ ...process.env, OCX_SERVICE: "1" }),
+  });
+  child.unref();
+  const deadline = Date.now() + 8_000;
+  while (Date.now() < deadline) {
+    const started = await findLiveProxy();
+    if (started) return started.port;
+    await new Promise(resolve => setTimeout(resolve, 250));
+  }
+  return null;
 }
-
-export const CLAUDE_NATIVE_NO_PROXY =
-  "ℹ️ OpenCodex proxy is not running. Launching Claude Code natively. Start the service with `ocx service start` to restore routing.";
 
 export const CLAUDE_NATIVE_ROUTING_OFF =
   "ℹ️ Claude Code routing is disabled in OpenCodex. Launching Claude Code natively. Enable Claude routing to use the proxy again.";
@@ -405,14 +419,44 @@ export type ClaudeLaunchPlan =
   | { kind: "native"; notice: string };
 
 export function claudeLaunchPlan(
-  proxyLive: boolean,
   configuredEnabled: boolean,
   liveEnabled: boolean | undefined,
 ): ClaudeLaunchPlan {
   if (!configuredEnabled) return { kind: "native", notice: CLAUDE_NATIVE_ROUTING_OFF };
-  if (!proxyLive) return { kind: "native", notice: CLAUDE_NATIVE_NO_PROXY };
   if (liveEnabled === false) return { kind: "native", notice: CLAUDE_NATIVE_LIVE_DISABLED };
   return { kind: "routed" };
+}
+
+export type ClaudeLaunchPreflight =
+  | { kind: "continue" }
+  | { kind: "native"; notice: string }
+  | { kind: "error"; message: string };
+
+/** Validate connected-client ownership before any native fallback can run. */
+export function claudeLaunchPreflight(
+  configuredEnabled: boolean,
+  clientState: ClientConnectionState,
+  tokenState?: ServiceApiTokenState,
+): ClaudeLaunchPreflight {
+  if (clientState.kind === "invalid" || clientState.kind === "mismatched") {
+    return { kind: "error", message: `Client state is ${clientState.kind}: ${clientState.reason}` };
+  }
+  if (clientState.kind === "connected") {
+    if (!clientState.value.selectedClients.includes("claude")) {
+      return { kind: "error", message: "Claude is not selected for this remote hub connection." };
+    }
+    if (tokenState?.kind !== "present" || tokenState.fingerprint !== clientState.value.tokenFingerprint) {
+      return {
+        kind: "error",
+        message: tokenState?.kind === "absent"
+          ? "Connected service token is missing."
+          : "Connected service token ownership changed.",
+      };
+    }
+  }
+  return configuredEnabled
+    ? { kind: "continue" }
+    : { kind: "native", notice: CLAUDE_NATIVE_ROUTING_OFF };
 }
 
 const NATIVE_STRIPPED_LEVERS = [
@@ -453,19 +497,18 @@ export function buildNativeClaudeEnv(
   const env: ClaudeLaunchEnv = { ...base };
   deleteUntrustedAnthropicSlots(env, deps);
 
-  for (const name of ["ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY"] as const) {
+  const admissionSlots = ["ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY"] as const;
+  const hasOwnedAdmission = admissionSlots.some(name => {
+    const value = env[name]?.trim();
+    return Boolean(value && (value === PROXY_MARKER || isProxyAdmissionSecret(value, config)));
+  });
+  const baseUrl = env.ANTHROPIC_BASE_URL;
+  if (hasOwnedAdmission && targetsLocalClaudeProxy(baseUrl, config.port)) {
+    delete env.ANTHROPIC_BASE_URL;
+  }
+  for (const name of admissionSlots) {
     const value = env[name]?.trim();
     if (value && (value === PROXY_MARKER || isProxyAdmissionSecret(value, config))) delete env[name];
-  }
-
-  const baseUrl = env.ANTHROPIC_BASE_URL;
-  if (baseUrl) {
-    try {
-      const parsed = new URL(baseUrl);
-      if (parsed.protocol === "http:" && isClaudeLoopbackHostname(parsed.hostname)) delete env.ANTHROPIC_BASE_URL;
-    } catch {
-      // Preserve a user-provided value that is not a parseable URL.
-    }
   }
 
   for (const name of NATIVE_STRIPPED_LEVERS) delete env[name];
@@ -531,35 +574,28 @@ export function rootSkipPermissionsNotice(env: ClaudeLaunchEnv): string {
 
 export async function cmdClaude(args: string[]): Promise<number> {
   const config = loadConfig();
-  if (config.claudeCode?.enabled === false) {
-    return launchNativeClaude(config, args, CLAUDE_NATIVE_ROUTING_OFF);
-  }
   const clientState = readClientConnectionState();
-  if (clientState.kind === "invalid" || clientState.kind === "mismatched") {
-    console.error(`Client state is ${clientState.kind}: ${clientState.reason}`);
+  const tokenState = clientState.kind === "connected" ? readServiceApiTokenState() : undefined;
+  const preflight = claudeLaunchPreflight(config.claudeCode?.enabled !== false, clientState, tokenState);
+  if (preflight.kind === "error") {
+    console.error(preflight.message);
     return 1;
   }
+  if (preflight.kind === "native") return launchNativeClaude(config, args, preflight.notice);
   let route: number | ClaudeRoutingTarget;
   let contextWindows: Record<string, number>;
   if (clientState.kind === "connected") {
-    if (!clientState.value.selectedClients.includes("claude")) {
-      console.error("Claude is not selected for this remote hub connection.");
-      return 1;
-    }
-    const token = readServiceApiTokenState();
-    if (token.kind !== "present" || token.fingerprint !== clientState.value.tokenFingerprint) {
-      console.error(token.kind === "absent" ? "Connected service token is missing." : "Connected service token ownership changed.");
-      return 1;
-    }
-    route = { baseUrl: clientState.value.serverUrl, admissionToken: token.token };
+    if (tokenState?.kind !== "present") return 1;
+    route = { baseUrl: clientState.value.serverUrl, admissionToken: tokenState.token };
     contextWindows = readConnectedClaudeContextWindows();
   } else {
     const port = await ensureProxyForClaude();
     if (!port) {
-      return launchNativeClaude(config, args, CLAUDE_NATIVE_NO_PROXY);
+      console.error("❌ Proxy did not become healthy after starting.");
+      return 1;
     }
     const liveState = await fetchClaudeCodeState(config, port);
-    const plan = claudeLaunchPlan(true, true, liveState.enabled);
+    const plan = claudeLaunchPlan(true, liveState.enabled);
     if (plan.kind === "native") return launchNativeClaude(config, args, plan.notice);
     route = port;
     contextWindows = liveState.contextWindows;
