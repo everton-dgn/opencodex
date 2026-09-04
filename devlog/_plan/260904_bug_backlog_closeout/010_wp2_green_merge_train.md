@@ -71,3 +71,29 @@ Order: 3430 -> 3401 -> 3420 -> 3405.
 the bodies contain `Closes #N`: GitHub only auto-closes when the PR merges into the
 default branch (`main`), and these target `dev`. Every linked issue must therefore be
 closed manually after its merge lands, quoting the dev merge sha.
+
+## Merge mechanics (wp2 P-phase stale check, re-verified against the live repo)
+
+Re-verified before executing: all four of #3430, #3401, #3420, #3405 report
+`mergeable=MERGEABLE` with zero non-success checks. `mergeStateStatus=BLOCKED` is not a
+CI failure — the `Protect dev` ruleset requires one approving review, and every PR sits
+at `REVIEW_REQUIRED`.
+
+Ruleset (`gh api repos/lidge-jun/opencodex/rules/branches/dev`):
+`required_approving_review_count: 1`, `require_code_owner_review: true`,
+`require_extra_approval_for_unattributed_changes: true`,
+`allowed_merge_methods: ["merge", "squash"]` — rebase merges are off, so squash it is.
+
+How the review requirement is satisfied: these are contributor PRs, so the maintainer
+reviews and approves them normally. MAINTAINERS.md line 172 notes that the admin role
+also holds a `pull_request` bypass, but a bypass is not the right instrument here —
+"Authors do not approve their own pull requests" still governs, and the file requires
+that any bypass use be RECORDED on the PR rather than inferred from a merge timestamp.
+Since the maintainer is not the author of any of these four, an ordinary approving review
+is both available and more honest, and it leaves the reasoning visible on the PR.
+CODEOWNERS puts `@lidge-jun` on `/src/adapters/`, `/src/providers/`, `/src/codex/`,
+`/src/server/`, and `/.github/`, so the same review satisfies code-owner sign-off.
+
+Each approval carries the substantive finding from the independent review lane, so the
+merge record shows what was checked — including the two MERGE-WITH-NOTE items (#3405's
+claimed-baseline suite failures, #3401's partial launcher coverage).
