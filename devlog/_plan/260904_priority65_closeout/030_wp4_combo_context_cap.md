@@ -48,16 +48,33 @@ rather than dangerous"라고 적는다.
 - IN: PR을 있는 그대로 스쿼시 머지.
 - OUT: 코드 수정, 리베이스, 추가 매처 확장.
 
-## 실행 절차
+## 실행 절차 (P-phase 개정 — 직접 스쿼시에서 carry로)
 
-1. `git fetch origin dev` — dev가 움직였는지 확인.
-2. `gh pr checks 3461` — exact head에서 required green 재확인.
-3. `gh pr merge 3461 --squash --admin`, 커밋 본문에 트레일러 포함:
+**개정 사유.** 계획 수립 시점에는 `gh pr merge 3461 --squash --admin`을 예정했다.
+실행 직전 확인에서 전제 하나가 무너졌다: #3461은 **fork PR**이고
+(`head.repo.fork = true`, author `RHODIZSECURITY`), 그 head `4e16f889b`에는
+게이트 4개(enforce-target/hygiene/label/resolve-pr)만 돌았을 뿐
+**Cross-platform CI가 한 번도 실행되지 않았다.** `gh run list --commit 4e16f889b`가
+빈 출력이고, fork PR의 워크플로는 `action_required` 승인 대기로 걸린다.
+
+AGENTS.md가 적은 그대로다 — "fork contributors cannot start repository CI; a
+maintainer has to". 게이트 4개만 초록인 상태를 "CI green"이라고 부르고 머지하면
+이 유닛의 criterion c-2(각 PR이 exact head에서 required CI green)를 위반한다.
+
+**개정안: 이 유닛의 stacked PR 체인에 carry한다.**
+
+1. `git fetch origin dev` — dev head를 다시 읽는다(이미 `2421e44ce` → `1a5c9ab23`으로 움직였다).
+2. `git fetch origin pull/3461/head` 로 원 커밋을 가져와 `codex/priority65-closeout`
+   위에 cherry-pick한다. 코드는 한 줄도 바꾸지 않는다 — 감사에서 그대로 머지 가능 판정이 났다.
+3. cherry-pick은 원 author를 보존하지만, 스쿼시 머지에서 살아남는 것은 **트레일러**다.
+   `--no-commit` 후 트레일러를 붙여 커밋하거나 `git commit --amend`로 본문에 추가한다:
    `Co-authored-by: RHODIZ IT <조회한 이메일>` — 이메일은
    `gh api repos/lidge-jun/opencodex/pulls/3461/commits --jq '.[].commit.author'`로
-   구현 시점에 조회한다. `privacy:scan`이 devlog를 읽으므로 평문으로 적지 않는다.
-4. `git fetch origin dev && git merge-base --is-ancestor <merge-sha> FETCH_HEAD`
-5. `git log -1 --format=%B <merge-sha> | rg Co-authored-by` — 스쿼시 후 트레일러 생존 확인.
+   구현 시점에 조회한다. `privacy:scan`이 devlog를 읽으므로 여기에 평문으로 적지 않는다.
+4. 이 브랜치의 PR에서 Cross-platform CI가 실제로 돌고 green인지 확인한다.
+5. 머지 후 `git fetch origin dev && git merge-base --is-ancestor <merge-sha> FETCH_HEAD`.
+6. `git log -1 --format=%B <merge-sha> | rg Co-authored-by` — 스쿼시 후 트레일러 생존 확인.
+7. #3461은 `landed-via-maintainer` 라벨과 함께 close하고, 랜딩 SHA를 코멘트로 남긴다.
 
 ## Accept criteria
 
