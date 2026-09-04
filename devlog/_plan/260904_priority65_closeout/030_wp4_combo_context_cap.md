@@ -53,7 +53,9 @@ rather than dangerous"라고 적는다.
 1. `git fetch origin dev` — dev가 움직였는지 확인.
 2. `gh pr checks 3461` — exact head에서 required green 재확인.
 3. `gh pr merge 3461 --squash --admin`, 커밋 본문에 트레일러 포함:
-   `Co-authored-by: RHODIZ IT <info.rhodiz@gmail.com>`
+   `Co-authored-by: RHODIZ IT <조회한 이메일>` — 이메일은
+   `gh api repos/lidge-jun/opencodex/pulls/3461/commits --jq '.[].commit.author'`로
+   구현 시점에 조회한다. `privacy:scan`이 devlog를 읽으므로 평문으로 적지 않는다.
 4. `git fetch origin dev && git merge-base --is-ancestor <merge-sha> FETCH_HEAD`
 5. `git log -1 --format=%B <merge-sha> | rg Co-authored-by` — 스쿼시 후 트레일러 생존 확인.
 

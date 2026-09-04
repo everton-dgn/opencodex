@@ -789,17 +789,18 @@ bun test tests/anthropic-reasoning.test.ts
 
 ## 11. 커밋 / PR 규약
 
-원 저자 정보를 `gh api` 로 확인했다:
+원 저자는 `full999`(PR #3332). 트레일러에 쓸 이메일은 구현 시점에 다음으로 조회한다 —
+**이 문서에 평문으로 적지 않는다.** `privacy:scan`이 devlog를 스캔하므로 여기에 이메일을
+박으면 CI가 막는다.
 
 ```
-$ gh api repos/lidge-jun/opencodex/pulls/3332/commits --jq '.[].commit.author'
-{"date":"2026-09-03T05:47:19Z","email":"daiki.furutani@walker-s.co.jp","name":"full999"}
+gh api repos/lidge-jun/opencodex/pulls/3332/commits --jq '.[].commit.author'
 ```
 
 커밋 본문에 반드시 포함(스쿼시 후에도 살아남도록 브랜치 커밋 본문에 넣는다):
 
 ```
-Co-authored-by: full999 <daiki.furutani@walker-s.co.jp>
+Co-authored-by: full999 <조회한 이메일>
 ```
 
 `AGENTS.md` "Landing another author's work" 규정상 재구현/carry는 트레일러가 필수다.
@@ -827,4 +828,3 @@ PR 설명에는 `.github/PULL_REQUEST_TEMPLATE.md` 의 Summary / Verification / 
 6. Accept criteria 4/5의 `rg` 두 줄 확인.
 7. `.tmp/` 스크래치 삭제 확인, `git status` 로 의도한 5파일만 변경되었는지 확인.
 8. co-author 트레일러 포함해 커밋, `dev` 타깃 PR 생성.
-

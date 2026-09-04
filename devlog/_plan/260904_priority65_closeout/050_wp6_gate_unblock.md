@@ -69,7 +69,8 @@ i18n 키를 새로 만들지 않은 결정도 지지한다. 9개 로케일에 �
 
 ## Accept criteria
 
-- #3327이 dev의 조상이 되고, 스쿼시 커밋에 `Co-authored-by: olddonkey <olddonkeyblog@gmail.com>`이 남는다.
+- #3327이 dev의 조상이 되고, 스쿼시 커밋에 `Co-authored-by: olddonkey` 트레일러가 남는다
+  (이메일은 `gh api .../pulls/3327/commits`로 구현 시점 조회 — devlog에 평문 금지).
 - 좁힌 단정이 `bun test tests/provider-quota.test.ts`에서 green.
 - #3251은 dev 최신 위로 리베이스되고, 남은 차단이 스크린샷 하나임이 PR에 기록된다.
 
