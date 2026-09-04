@@ -48,3 +48,59 @@ contract — a ladder claim there needs a live probe, not a guess.
 
 A written finding per candidate naming the adapter, the capability evidence, and
 the verdict. Reported to the user regardless of whether any code changes.
+
+## Findings (260904)
+
+### `lidge/qwen3.8-27b-nvfp4` — NOT A DEFECT, and not this repository's to fix
+
+`lidge` is not a registry provider. The only two `lidge` matches in
+`src/providers/registry.ts` are maintainer-attribution comments (lines 744 and
+1781). It is the operator's own **custom provider** in `~/.opencodex/config.json`,
+pointed at `http://100.100.125.116:8081/v1` on a private network, and it is
+currently `disabled: true`. The model is a `customModels` row whose
+`reasoningEfforts` is unset.
+
+There is no registry ladder that could fill it, and there should not be: it is a
+self-hosted vLLM-style endpoint whose capabilities depend on the deployed server
+and its launch flags, not on a vendor contract this repository can assert. The
+correct fix is operator-side — set the ladder on the custom model, which the
+management API already supports (`src/server/management/model-routes.ts` reads
+`reasoningEfforts` on a custom-model PUT).
+
+Verdict: **no code change.** Report to the user as a configuration note.
+
+### `opencode-free/muse-spark-1.2-contributor-free` — NOT A DEFECT under the fix rule
+
+The provider DOES declare `modelReasoningEfforts`, but only for
+`OPENCODE_FREE_DEEPSEEK_MODELS` — a one-element list, `deepseek-v4-flash-free`
+(registry line 616). Every other Zen free model, including the muse row, falls
+through with no ladder.
+
+That is not the Anthropic shape. Zen's free roster is `liveModels: true`:
+discovered at runtime, changing on the vendor's schedule, and heterogeneous —
+DeepSeek thinking models sit beside models with no reasoning at all. The
+DeepSeek entries are declared precisely because they were pinned to a verified
+wire contract (`modelReasoningEffortMap`, `preserveReasoningContentModels`,
+issues #950/#994). Asserting a ladder for a discovered model whose upstream
+effort support nobody verified would be exactly the failure mode this unit's
+own rule forbids: an advertised control that may do nothing.
+
+Note also that `muse-spark-1.2-contributor-free` on the Zen tier is a different
+route from `meta-muse/muse-spark-1.3`, which DOES carry a ladder
+(`META_MUSE_REASONING_EFFORTS`, registry line 1508). So the capability is
+already advertised where it was verified.
+
+Verdict: **no code change without a live probe** of the Zen route's effort
+handling. Recorded as a candidate, not a defect.
+
+### What the two have in common
+
+Neither is the reported bug. The Anthropic case was a first-party provider with a
+known vendor contract and an adapter that already honored effort — every fact
+needed to assert the ladder was in the repository. These two are a private
+self-hosted endpoint and a live-discovered free roster; in both the missing
+ladder is an honest "unknown" rather than a lost fact.
+
+The general `derive.ts` per-model fill shipped in the Anthropic PR does help
+both classes going forward: any operator who pins one model on these providers
+will no longer suppress whatever registry knowledge exists for the others.
