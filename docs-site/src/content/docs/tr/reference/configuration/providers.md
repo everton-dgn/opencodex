@@ -230,15 +230,19 @@ ve otomatik rotasyon sağlayıcı kısıtlamalarını tetikleyebilir.
 | `anthropicAccountPool.quotaWindow?` | `"five-hour" \| "weekly" \| "max-utilization"` | `"five-hour"` | Kullanıma dayalı hesap seçiminde kullanılan, sağlayıcının bildirdiği önbelleğe alınmış kullanım çubuğu. `five-hour` mevcut davranışı korur. `weekly` haftalık çubuğu kullanır ve başka uygun hesap kaldığı sürece 5 saatlik çubuğu tükenmiş hesapları atlar; hiçbiri kalmazsa bu hesaplara geri döner. `max-utilization` bilinen en yüksek değeri kullanır; haftalık değer henüz yokken 5 saatlik değeri kullanabilir, ikisi de bilinmiyorsa hesap unknown kullanım sırasını izler. Bilinen kullanım unknown değerlerden önce gelir; tüm uygun hesaplar unknown olsa bile uygun sıradaki bir hesap seçilir. Belgelenen daha düşük 5 saatlik kullanım eşitlik bozmasından sonra tam eşitlikte de uygun sıra korunur. Sağlıklı affinity oturumları önceden yeniden dengelenmez. Yeni oturum ataması ve uygun bir 429 yedeğine geçildikten sonraki yönlendirme kurtarmasında `quota`, uygun adayları doğrudan bu pencereye göre sıralar; `fill-first`, bu pencerenin eşik ve tükenme kurallarıyla kararlı sırada ilerler; `round-robin` ayarı yok sayar. Cooldown, yük devretme sınırları ve yeniden kimlik doğrulama uygunluğu ayrı yerel durum olarak kalır. Hesap başına haftalık çubuklar ancak dashboard Sağlayıcılar sayfasında sorgulandıktan sonra bilinir. |
 | `anthropicAccountPool.stickyLimit?` | `number` | `1` | Bir round-robin seçiminde tutulan başarılı yeni oturum bağlamaları. Aralık 1–100. |
 
-Etkinleştirildiğinde 429, `Retry-After`'dan veya varsayılan bir geri çekilmeden
-sınırlı soğuma kaydeder ve istek içinde dönebilir. Bağlılık işleme özeldir ve
-boyut sınırlıdır. Kimlik bilgisi 401/403, hesabı yeniden kimlik doğrulama
-gerektiriyor olarak işaretler. Uygun tüm hesaplar soğuyorsa istemciler bir
-kimlik doğrulama hatası değil, bilindiğinde `Retry-After` ile 429 alır.
+İki veya daha fazla uygun hesap varsa 429, `Retry-After`'dan veya varsayılan bir
+geri çekilmeden sınırlı soğuma kaydeder ve bu bayrak yokken ya da `false` iken
+bile istek içinde başka hesaba geçebilir. Havuzu etkinleştirmek ayrıca proaktif
+yapışkan bağlılığı ve yeni oturum seçimini açar. Bağlılık işleme özeldir ve boyut
+sınırlıdır. Kimlik bilgisi 401/403, hesabı yeniden kimlik doğrulama gerektiriyor
+olarak işaretler. Uygun tüm hesaplar soğuyorsa istemciler bir kimlik doğrulama
+hatası değil, bilindiğinde `Retry-After` ile 429 alır.
 
 :::caution[Deneysel]
-Anthropic hesap politikası riskini anlamadığınız sürece bunu devre dışı bırakın.
-Emin olmadığınızda manuel `ocx account use anthropic <id>` geçişini tercih edin.
+Anthropic hesap politikası riskini anlamadığınız sürece proaktif havuzu devre dışı
+bırakın. Bu, tepkisel 429 geçişini devre dışı bırakmaz; otomatik geçiş istemiyorsanız
+yalnızca bir uygun hesap bırakın. Emin olmadığınızda manuel
+`ocx account use anthropic <id>` geçişini tercih edin.
 :::
 
 ### Yönetilen kayıt biçimleri

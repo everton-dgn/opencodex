@@ -204,14 +204,16 @@ rotation automatique peut déclencher des restrictions du fournisseur.
 | `anthropicAccountPool.quotaWindow?` | `"five-hour" \| "weekly" \| "max-utilization"` | `"five-hour"` | Barre d'utilisation signalée par le fournisseur, mise en cache et utilisée pour la sélection selon l'utilisation. `five-hour` conserve le comportement actuel. `weekly` utilise la barre hebdomadaire et ignore les comptes dont la barre sur 5 heures est épuisée tant qu'un autre compte admissible reste disponible, mais y revient si aucun autre ne reste. `max-utilization` utilise la valeur connue la plus élevée et peut donc employer la barre sur 5 heures avant que la barre hebdomadaire soit disponible ; si aucune n'est connue, le compte suit l'ordre des utilisations inconnues. Les utilisations connues précèdent les inconnues, mais si tous les comptes admissibles sont inconnus, la sélection en renvoie tout de même un dans leur ordre admissible. Après le départage documenté par la plus faible utilisation sur 5 heures, une égalité exacte conserve cet ordre. Une session saine avec affinité n'est pas rééquilibrée de manière proactive. Pour l'affectation des nouvelles sessions et la reprise du routage après un remplacement admissible à la suite d'un 429, `quota` classe directement les candidats admissibles avec cette fenêtre ; `fill-first` avance dans un ordre stable selon le seuil et les règles d'épuisement de cette fenêtre ; `round-robin` l'ignore. Le délai de récupération, les limites de basculement et l'éligibilité de réauthentification restent des états locaux distincts. Les barres hebdomadaires ne sont connues qu'après leur interrogation dans la page Fournisseurs du tableau de bord. |
 | `anthropicAccountPool.stickyLimit?` | `number` | `1` | Liaisons de nouvelle session réussies conservées sur une sélection à tour de rôle. Portée 1–100. |
 
-Lorsque cette option est activée, un 429 enregistre une temporisation bornée à partir de `Retry-After` ou d'un délai de repli, puis peut
-faire basculer la requête vers un autre compte. L'affinité est locale au processus et de taille bornée. Un 401/403 lié aux identifiants marque le compte
+Avec au moins deux comptes admissibles, un 429 enregistre une temporisation bornée à partir de `Retry-After` ou d'un délai de repli, puis peut
+faire basculer la requête vers un autre compte même si cette option est absente ou vaut `false`. L'activation du groupe ajoute l'affinité proactive
+et la sélection des nouvelles sessions. L'affinité est locale au processus et de taille bornée. Un 401/403 lié aux identifiants marque le compte
 comme devant être réauthentifié. Si tous les comptes admissibles sont en temporisation, les clients reçoivent un 429 accompagné de
 `Retry-After` lorsqu'il est connu, et non une erreur d'authentification.
 
 :::caution[Expérimental]
-Laissez cette option désactivée, sauf si vous comprenez les risques liés aux règles d'Anthropic concernant les comptes. En cas de doute,
-préférez le changement manuel avec `ocx account use anthropic <id>`.
+Laissez le regroupement proactif désactivé, sauf si vous comprenez les risques liés aux règles d'Anthropic concernant les comptes. Cela ne
+désactive pas la rotation réactive après 429 ; ne conservez qu'un seul compte admissible si vous refusez tout changement automatique. En cas
+de doute, préférez le changement manuel avec `ocx account use anthropic <id>`.
 :::
 
 ### Formes d'enregistrement gérées
