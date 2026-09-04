@@ -71,3 +71,30 @@ confirmation of the independence the audit predicted from the hunk positions.
 
 Not merged from the green set: #3403, held back for the dotted-alias collision and
 carried into wp3 as a named item.
+
+## Post-merge CI: two regressions, both repaired (#3439)
+
+Cross-platform CI on the final merge sha 20011a1c failed. Four jobs went red, and the
+cause was two distinct test failures -- both of which were green on their own PR head and
+only failed once the changes sat on `dev` together. This is the case the PR gates
+structurally cannot catch, and it is the reason the post-merge dev run is checked rather
+than assumed.
+
+1. `tests/loopback-listener-integration.test.ts` (#3430's own test) pinned the downstream
+   status to `[400, 503]`. The relay answers 401 when it admits the request and then finds
+   no usable credential. The neighbouring #3192 search test already allowed `[401, 503]`
+   for the same reason; the images copy did not. Widened to `[400, 401, 503]` so the test
+   asserts admission -- its actual subject -- rather than how far the relay gets.
+2. `tests/star-deferral.test.ts` faked a TTY through `process.stdin.isTTY`. #3401 moved the
+   guard to `isatty(0) && isatty(1)` precisely so the stream is never constructed, since
+   constructing it dereferences a possibly-unlinked cwd (#3400). A property fake cannot
+   reach a file descriptor, so the TTY decision joined the existing `depsForTests` seam.
+
+Both were reproduced locally against `dev` before being fixed, so these are confirmed
+repairs. Repaired in PR #3439 off `codex/260904-bug-backlog-closeout`, with
+`Co-authored-by` trailers for @ChickenBreast-ky and @agentHits since the tests are theirs.
+
+Worth recording as a process note: the merge train verified each PR against its own green
+CI, which is what the instructions asked for, and that was still not sufficient. Nothing in
+the per-PR gate models the combination. The dev run after the last merge is the only place
+the interaction shows up.
