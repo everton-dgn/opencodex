@@ -86,6 +86,16 @@ route-specific results rather than repeating this table.
 For the concepts behind the model roster and encrypted worker-task behavior, see
 [Sub-agent Surface](/guides/sub-agent-surface/).
 
+### Client integration rollback journal
+
+| Method and path | Purpose | Notable errors |
+| --- | --- | --- |
+| `GET /api/client-integrations/journal?client=...` | List rollback operations, optionally for one client. Each row includes the server-computed `deletable` flag. | 400 invalid client |
+| `DELETE /api/client-integrations/journal?opId=...` | Retire one older rollback operation and remove its snapshot when possible. Success returns `snapshotRemoved`; `false` means cleanup was retained for maintenance retry. | 400 missing `opId`; 404 missing or already retired operation; 409 newest operation for that client |
+
+Deletion appends a tombstone instead of rewriting the journal. The newest operation for each client
+is protected server-side so the current undo point remains available.
+
 ### Combos
 
 | Method and path | Purpose | Notable errors |
@@ -244,7 +254,7 @@ whether to star the repository.
 
 | Method and path | Purpose | Notable errors |
 | --- | --- | --- |
-| `GET /api/system/memory` | Return scalar process, heap, stream, response-state, watchdog, and active-turn metrics | — |
+| `GET /api/system/memory` | Return scalar process, heap, stream, response-state, watchdog, and active-turn metrics. Response-state diagnostics include spill-write status, consecutive failures, fixed privacy-safe failure class, and last failure/success timestamps; raw errors and paths are never returned. | — |
 | `POST /api/system/restart` | Begin a drain-aware process restart without removing client injection | Returns 202; repeated calls report the existing drain |
 | `POST /api/stop` | Stop the service, restore native Codex, remove managed Grok injection, and drain the proxy | 409 service ownership conflict; 409 `respawnable_service` when a Windows Task Scheduler wrapper could respawn the proxy and the caller is not `ocx stop` (nothing is changed); 409 when the installed manager refuses to stop; 409 `service_state_unknown` when the Task Scheduler state cannot be read (nothing is changed; repair the query and retry) |
 | `GET /api/system/codex-app-server` | Report whether running Codex app-servers predate the current model catalog | — |

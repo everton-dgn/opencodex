@@ -362,7 +362,7 @@ Native passthrough SSE has TWO shapes, selected per request in
   including the #44 late-terminal semantics.
 
 The two-shape contract is mirror-commented in `src/server/index.ts`; the real
-`core.ts` gate is source-invariant-tested by `tests/passthrough-abort.test.ts`,
+`core.ts` gate is source-invariant-tested by `tests/responses/passthrough-abort.test.ts`,
 and the platform matrix lives in `tests/lib/bun-stream-caps.test.ts`. Keep all three
 in lockstep with any passthrough-policy change.
 
@@ -590,7 +590,7 @@ sentinel, and live probes (2026-08-07) confirm the stream closes on the terminal
 terminal-output boundary (`src/server/relay.ts`) cuts the stream at that event and synthesizes
 `[DONE]` itself, so DeepSeek streams live again; the registry knob remains as a one-line
 rollback for upstreams that regress, kept suite-reachable by a synthetic-registry fixture in
-`tests/deepseek-inbound-wire.test.ts`.
+`tests/providers/deepseek-inbound-wire.test.ts`.
 Synthesized output is capped at 10,000 items across HTTP and WebSocket reframing. HTTP frames are
 encoded incrementally, so bounded upstream JSON cannot expand into an unbounded event array or SSE string.
 
@@ -1022,9 +1022,11 @@ its own: it forwards what the request already carries — Codex's session key on
 (metadata.user_id hash, else the system+tools cohort hash) — and a request with no key stays
 keyless. An explicit provider-level `promptCacheKey: false` continues to opt out, and the flag is
 persisted through `providerConfigSeed`/`enrichProviderFromRegistry` for new configs; key-pool 429
-rotation keeps it — along with every other registry backfill — because the retry inherits the
-request's routed provider and swaps only the API key (`rotateProviderTransportOn429` in
-src/providers/key-failover.ts). If an opted-in upstream rejects the field, OpenCodex does not strip it and retry or mutate the
+rotation keeps it — along with every other registry backfill — because the retry starts from the
+fresh committed provider row and routes it again (`rotateProviderTransportOn429` in
+src/providers/key-failover.ts). Stale request-time config fields are deliberately discarded so a
+concurrent deletion stays authoritative; only runtime `fetch` state and generated OpenCode session
+affinity survive the rebuild. If an opted-in upstream rejects the field, OpenCodex does not strip it and retry or mutate the
 saved configuration. Other OpenAI-compatible providers remain deny-by-default because strict
 backends may reject the OpenAI-specific field.
 
