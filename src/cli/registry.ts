@@ -315,10 +315,11 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   {
     name: "claude",
     usage: "ocx claude [claude args...]",
-    summary: "Launch Claude Code wired to the proxy (env injection + gateway model discovery).",
+    summary: "Launch Claude Code through a live proxy, with native fallback when routing is unavailable.",
     details: [
-      "Ensures the proxy is running, then execs `claude` with ANTHROPIC_BASE_URL/ANTHROPIC_AUTH_TOKEN,",
+      "Uses an already-running proxy and execs `claude` with ANTHROPIC_BASE_URL/ANTHROPIC_AUTH_TOKEN,",
       "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1 and model slots from config.claudeCode.",
+      "It does not start the service. When the proxy is absent or Claude routing is disabled, it launches Claude Code natively.",
       "Routed models appear in the native /model picker with stable claude-opus-4-8-2026MMDD slot aliases (Claude Code >= 2.1.129).",
       "Older versions: pick models via ANTHROPIC_MODEL or /model <id> directly (any string passes through).",
       "User-exported ANTHROPIC_* variables always take precedence.",

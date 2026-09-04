@@ -1,5 +1,15 @@
 import { describe, expect, test } from "bun:test";
-import { buildClaudeEnv, claudeNotFoundHint, ensureProxyForClaude, rootSkipPermissionsNotice, shouldAllowRootSkipPermissions } from "../src/cli/claude";
+import {
+  buildClaudeEnv,
+  buildNativeClaudeEnv,
+  claudeLaunchPlan,
+  claudeNotFoundHint,
+  ensureProxyForClaude,
+  isProxyOnlyModelId,
+  nativeModelOverride,
+  rootSkipPermissionsNotice,
+  shouldAllowRootSkipPermissions,
+} from "../src/cli/claude";
 import { commandInvocation } from "../src/lib/win-exec";
 import type { LivenessIo, LiveProxy } from "../src/server/proxy-liveness";
 import type { OcxConfig } from "../src/types";
@@ -27,7 +37,7 @@ const AUTH_PRESENT = {
 };
 
 describe("ocx claude proxy liveness", () => {
-  test("retries the initial liveness probe before spawning a proxy", async () => {
+  test("retries the liveness probe without starting a proxy", async () => {
     const seen: (number | undefined)[] = [];
     const findLiveProxy = async (io?: LivenessIo): Promise<LiveProxy> => {
       seen.push(io?.attempts);
@@ -37,6 +47,79 @@ describe("ocx claude proxy liveness", () => {
 
     expect(await ensureProxyForClaude({ findLiveProxy })).toBe(10100);
     expect(seen).toEqual([3]);
+  });
+
+  test("returns null when no proxy is live", async () => {
+    const seen: (number | undefined)[] = [];
+    const findLiveProxy = async (io?: LivenessIo): Promise<null> => {
+      seen.push(io?.attempts);
+      return null;
+    };
+
+    expect(await ensureProxyForClaude({ findLiveProxy })).toBeNull();
+    expect(seen).toEqual([3]);
+  });
+});
+
+describe("ocx claude native fallback", () => {
+  test("routes only through a live proxy whose Claude route is enabled", () => {
+    expect(claudeLaunchPlan(true, true, true)).toEqual({ kind: "routed" });
+    expect(claudeLaunchPlan(true, true, undefined)).toEqual({ kind: "routed" });
+    expect(claudeLaunchPlan(false, true, undefined)).toMatchObject({ kind: "native" });
+    expect(claudeLaunchPlan(true, false, true)).toMatchObject({ kind: "native" });
+    expect(claudeLaunchPlan(true, true, false)).toMatchObject({ kind: "native" });
+  });
+
+  test("removes proxy-owned state while preserving user credentials and native model ids", () => {
+    const config = cfg({
+      apiKeys: [{ id: "local", name: "local", key: "ocx_data_local_key", createdAt: "2026-01-01" }],
+      providers: { mock: { adapter: "openai-chat", baseUrl: "http://x/v1" } },
+    });
+    const env = buildNativeClaudeEnv(config, {
+      PATH: "/usr/bin",
+      ANTHROPIC_BASE_URL: "http://127.0.0.1:10100",
+      ANTHROPIC_AUTH_TOKEN: "ocx_data_local_key",
+      ANTHROPIC_API_KEY: "sk-ant-user-key",
+      ANTHROPIC_MODEL: "claude-ocx-mock--model",
+      ANTHROPIC_DEFAULT_OPUS_MODEL: "mock/model",
+      ANTHROPIC_DEFAULT_SONNET_MODEL: "sonnet",
+      CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST: "1",
+      CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY: "1",
+      CLAUDE_CODE_AUTO_COMPACT_WINDOW: "829800",
+    }, {
+      preBunAnthropicSlots: ["ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY"],
+    });
+
+    expect(env.PATH).toBe("/usr/bin");
+    expect(env.ANTHROPIC_BASE_URL).toBeUndefined();
+    expect(env.ANTHROPIC_AUTH_TOKEN).toBeUndefined();
+    expect(env.ANTHROPIC_API_KEY).toBe("sk-ant-user-key");
+    expect(env.ANTHROPIC_MODEL).toBeUndefined();
+    expect(env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBeUndefined();
+    expect(env.ANTHROPIC_DEFAULT_SONNET_MODEL).toBe("sonnet");
+    expect(env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST).toBeUndefined();
+    expect(env.CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY).toBeUndefined();
+    expect(env.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBeUndefined();
+  });
+
+  test("keeps unrelated slash model ids and recognizes configured provider routes", () => {
+    expect(isProxyOnlyModelId("mock/model", ["mock"])).toBe(true);
+    expect(isProxyOnlyModelId("claude-ocx2-abcd")).toBe(true);
+    expect(isProxyOnlyModelId("arn:aws:bedrock:region:acct:inference-profile/us.anthropic.model", ["mock"])).toBe(false);
+    expect(isProxyOnlyModelId("claude-opus-5")).toBe(false);
+  });
+
+  test("overrides a persisted proxy model only with a configured native model", () => {
+    expect(nativeModelOverride("claude-ocx2-abcd", "opus", [], ["mock"]))
+      .toMatchObject({ flag: ["--model", "opus"] });
+    expect(nativeModelOverride("claude-ocx2-abcd", "mock/model", [], ["mock"]).flag).toBeUndefined();
+    expect(nativeModelOverride("claude-ocx2-abcd", "opus", ["--model", "sonnet"], ["mock"]))
+      .toEqual({});
+  });
+
+  test("preserves the root opt-in on native fallback", () => {
+    const env = buildNativeClaudeEnv(cfg(), {}, { allowRootSkipPermissions: true });
+    expect(env.IS_SANDBOX).toBe("1");
   });
 });
 

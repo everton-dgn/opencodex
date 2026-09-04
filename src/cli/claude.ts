@@ -1,16 +1,18 @@
 /**
- * `ocx claude [claude args...]` — launch Claude Code wired to the local proxy.
+ * `ocx claude [claude args...]` — launch Claude Code through a live local proxy,
+ * or natively when routing is unavailable or disabled.
  *
  * Mirrors `ccr code` UX (devlog/260711_claude_inbound/020, 003 E1/E2/E5/G1):
- * ensures the proxy is running, injects the Anthropic env slots, then execs the
- * `claude` CLI with stdio inherited. User-exported env wins except when a stale
+ * injects the Anthropic env slots, then execs the `claude` CLI with stdio inherited.
+ * The launcher never starts the service. User-exported env wins except when a stale
  * loopback opencodex base URL points at a different proxy port.
  */
 import { spawn } from "node:child_process";
 import { loadConfig } from "../config";
 import { injectClaudeAgentDefs } from "../claude/agents-inject";
+import { CLAUDE_ALIAS_PREFIX_V1, CLAUDE_ALIAS_PREFIX_V2 } from "../claude/alias";
 import { effectiveModelEnv, resolveAutoContext } from "../claude/context-windows";
-import { refreshGatewayModelCacheFromProxy } from "../claude/gateway-cache";
+import { claudeConfigDir, refreshGatewayModelCacheFromProxy } from "../claude/gateway-cache";
 import { commandInvocation } from "../lib/win-exec";
 import { isProxyAdmissionSecret } from "../server/auth-cors";
 import { findLiveProxy } from "../server/proxy-liveness";
@@ -18,13 +20,12 @@ import type { OcxConfig } from "../types";
 import { configuredAdminToken } from "../lib/admin-secrets";
 import { PROXY_MARKER, ownAdmissionTokens, defaultAuthDetectDeps, detectClaudeAuth, type AuthDetectDeps } from "../claude/auth-detect";
 import { resolveClaudeAuthMode } from "../claude/auth-mode";
-import { withProcessRuntimeProvenance } from "../lib/bun-runtime";
-import { selfLaunchArgv } from "../lib/self-launch-argv";
 import { ANTHROPIC_PARENT_ENV_SLOTS, trustedNodeLauncherContext, type AnthropicParentEnvSlot } from "./launcher-context";
 import { readClientConnectionState } from "../client/state";
 import { readServiceApiTokenState } from "../lib/service-secrets";
 import { DEFAULT_CATALOG_PATH } from "../codex/paths";
 import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { aliasForNative, aliasForRoute } from "../claude/alias";
 import { desktop3pAlias } from "../claude/desktop-3p";
 
@@ -48,6 +49,29 @@ export type ClaudeEnvDeps = {
   /** Explicit unsafe opt-in from a root `--dangerously-skip-permissions` launch. */
   allowRootSkipPermissions?: boolean;
 };
+
+function deleteUntrustedAnthropicSlots(env: ClaudeLaunchEnv, deps: ClaudeEnvDeps): void {
+  const explicitSlots = deps.preBunAnthropicSlots;
+  const trustedSlots = explicitSlots === undefined
+    ? trustedNodeLauncherContext()?.anthropicEnvSlots ?? []
+    : explicitSlots ?? [];
+  const exported = new Set<AnthropicParentEnvSlot>(trustedSlots);
+  for (const name of ANTHROPIC_PARENT_ENV_SLOTS) {
+    const value = env[name];
+    if (value !== undefined && value !== "" && !exported.has(name)) delete env[name];
+  }
+  delete env.OCX_PRE_BUN_ANTHROPIC_ENV;
+  delete env.OCX_NODE_LAUNCH_CONTEXT;
+}
+
+function readPickerDefaultModel(configDir: string): string | null {
+  try {
+    const parsed = JSON.parse(readFileSync(join(configDir, "settings.json"), "utf8")) as Record<string, unknown>;
+    return typeof parsed.model === "string" && parsed.model.trim() !== "" ? parsed.model.trim() : null;
+  } catch {
+    return null;
+  }
+}
 
 function isClaudeLoopbackHostname(hostname: string): boolean {
   const normalized = hostname.toLowerCase().replace(/\.$/, "");
@@ -128,18 +152,7 @@ export function buildClaudeEnv(
   // Direct `bun src/cli/index.ts` therefore loses ambient Anthropic values. That is a
   // real cost to a documented entry point, and the escape hatch is the launcher: run
   // through `ocx` (the published bin) and genuine shell exports are preserved by proof.
-  const explicitSlots = deps.preBunAnthropicSlots;
-  const trustedSlots = explicitSlots === undefined
-    ? trustedNodeLauncherContext()?.anthropicEnvSlots ?? []
-    : explicitSlots ?? [];
-  const exported = new Set<AnthropicParentEnvSlot>(trustedSlots);
-  for (const name of ANTHROPIC_PARENT_ENV_SLOTS) {
-    const value = env[name];
-    if (value !== undefined && value !== "" && !exported.has(name)) delete env[name];
-  }
-  // Never forward old or current provenance seams to Claude Code.
-  delete env.OCX_PRE_BUN_ANTHROPIC_ENV;
-  delete env.OCX_NODE_LAUNCH_CONTEXT;
+  deleteUntrustedAnthropicSlots(env, deps);
   const setDefault = (name: string, value: string | undefined) => {
     if (value === undefined || value.length === 0) return;
     if (env[name] !== undefined && env[name] !== "") return; // user wins
@@ -302,7 +315,12 @@ export function buildClaudeEnv(
  * daemon registers every selector form — audit R3#1). 3s bound + management auth header.
  * (no [1m] marking, conservative).
  */
-export async function fetchClaudeContextWindows(config: OcxConfig, port: number, timeoutMs = 3_000): Promise<Record<string, number>> {
+export interface ClaudeCodeLiveState {
+  contextWindows: Record<string, number>;
+  enabled?: boolean;
+}
+
+export async function fetchClaudeCodeState(config: OcxConfig, port: number, timeoutMs = 3_000): Promise<ClaudeCodeLiveState> {
   try {
     const headers = new Headers();
     const token = configuredAdminToken();
@@ -311,13 +329,20 @@ export async function fetchClaudeContextWindows(config: OcxConfig, port: number,
       headers,
       signal: AbortSignal.timeout(timeoutMs),
     });
-    if (!res.ok) return {};
-    const body = await res.json() as { contextWindows?: Record<string, number> };
-    return body.contextWindows && typeof body.contextWindows === "object" ? body.contextWindows : {};
+    if (!res.ok) return { contextWindows: {} };
+    const body = await res.json() as { contextWindows?: Record<string, number>; enabled?: boolean };
+    return {
+      contextWindows: body.contextWindows && typeof body.contextWindows === "object" ? body.contextWindows : {},
+      ...(typeof body.enabled === "boolean" ? { enabled: body.enabled } : {}),
+    };
   } catch {
     console.error("⚠ 모델 컨텍스트 정보를 불러오지 못했습니다 — 1M 자동 표시는 이번 실행에서 생략됩니다.");
-    return {};
+    return { contextWindows: {} };
   }
+}
+
+export async function fetchClaudeContextWindows(config: OcxConfig, port: number, timeoutMs = 3_000): Promise<Record<string, number>> {
+  return (await fetchClaudeCodeState(config, port, timeoutMs)).contextWindows;
 }
 
 export function readConnectedClaudeContextWindows(path = DEFAULT_CATALOG_PATH): Record<string, number> {
@@ -359,29 +384,118 @@ export type ClaudeProxyEnsureDeps = {
 };
 
 export async function ensureProxyForClaude(deps: ClaudeProxyEnsureDeps = {}): Promise<number | null> {
-  // A proxy that has only just bound can miss a single probe while its event loop
-  // is still settling startup work — the same just-started race the stop paths
-  // already retry for (#764, SERVICE_STOP_LIVENESS). Only the attempts budget is
-  // borrowed here; the probe timeout remains DEFAULT_PROBE_TIMEOUT_MS (750 ms).
-  // Without this, `ocx claude` can spawn a second proxy while the first is serving.
+  // Retry the read-only probe because a proxy that has only just bound can miss one
+  // attempt while its event loop is still settling startup work. This launcher never
+  // starts the service: service lifecycle stays under explicit operator control.
   const live = await (deps.findLiveProxy ?? findLiveProxy)({ attempts: 3 });
-  if (live) return live.port;
-  const cfgPort = loadConfig().port;
-  const pinPort = typeof cfgPort === "number" && cfgPort > 0 ? cfgPort : 10100;
-  const child = spawn(process.execPath, selfLaunchArgv(["start", "--port", String(pinPort)]), {
-    detached: true,
-    stdio: "ignore",
-    windowsHide: true,
-    env: withProcessRuntimeProvenance({ ...process.env, OCX_SERVICE: "1" }),
-  });
-  child.unref();
-  const deadline = Date.now() + 8_000;
-  while (Date.now() < deadline) {
-    const started = await findLiveProxy();
-    if (started) return started.port;
-    await new Promise(resolve => setTimeout(resolve, 250));
+  return live?.port ?? null;
+}
+
+export const CLAUDE_NATIVE_NO_PROXY =
+  "ℹ️ OpenCodex proxy is not running. Launching Claude Code natively. Start the service with `ocx service start` to restore routing.";
+
+export const CLAUDE_NATIVE_ROUTING_OFF =
+  "ℹ️ Claude Code routing is disabled in OpenCodex. Launching Claude Code natively. Enable Claude routing to use the proxy again.";
+
+export const CLAUDE_NATIVE_LIVE_DISABLED =
+  "ℹ️ The running OpenCodex proxy has Claude Code routing disabled. Launching Claude Code natively. Restart the service after enabling routing.";
+
+export type ClaudeLaunchPlan =
+  | { kind: "routed" }
+  | { kind: "native"; notice: string };
+
+export function claudeLaunchPlan(
+  proxyLive: boolean,
+  configuredEnabled: boolean,
+  liveEnabled: boolean | undefined,
+): ClaudeLaunchPlan {
+  if (!configuredEnabled) return { kind: "native", notice: CLAUDE_NATIVE_ROUTING_OFF };
+  if (!proxyLive) return { kind: "native", notice: CLAUDE_NATIVE_NO_PROXY };
+  if (liveEnabled === false) return { kind: "native", notice: CLAUDE_NATIVE_LIVE_DISABLED };
+  return { kind: "routed" };
+}
+
+const NATIVE_STRIPPED_LEVERS = [
+  "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY",
+  "CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST",
+  "CLAUDE_CODE_MAX_CONTEXT_TOKENS",
+  "CLAUDE_CODE_AUTO_COMPACT_WINDOW",
+  "CLAUDE_CODE_ALWAYS_ENABLE_EFFORT",
+  "DISABLE_COMPACT",
+] as const;
+
+const MODEL_ENV_SLOT_NAMES = [
+  "ANTHROPIC_MODEL",
+  "ANTHROPIC_DEFAULT_OPUS_MODEL",
+  "ANTHROPIC_DEFAULT_SONNET_MODEL",
+  "ANTHROPIC_DEFAULT_FABLE_MODEL",
+  "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+  "ANTHROPIC_SMALL_FAST_MODEL",
+] as const;
+
+const DESKTOP_3P_ALIAS = /^claude-opus-4(?:-8)?-[a-z][0-9a-z]{2}$/;
+
+export function isProxyOnlyModelId(value: string, providerNames: readonly string[] = []): boolean {
+  const id = value.trim().replace(/\[1m\]$/, "");
+  if (!id) return false;
+  if (id.startsWith(CLAUDE_ALIAS_PREFIX_V1) || id.startsWith(CLAUDE_ALIAS_PREFIX_V2) || DESKTOP_3P_ALIAS.test(id)) {
+    return true;
   }
-  return null;
+  const slash = id.indexOf("/");
+  return slash > 0 && providerNames.includes(id.slice(0, slash));
+}
+
+export function buildNativeClaudeEnv(
+  config: OcxConfig,
+  base: ClaudeLaunchEnv,
+  deps: ClaudeEnvDeps = {},
+): ClaudeLaunchEnv {
+  const env: ClaudeLaunchEnv = { ...base };
+  deleteUntrustedAnthropicSlots(env, deps);
+
+  for (const name of ["ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY"] as const) {
+    const value = env[name]?.trim();
+    if (value && (value === PROXY_MARKER || isProxyAdmissionSecret(value, config))) delete env[name];
+  }
+
+  const baseUrl = env.ANTHROPIC_BASE_URL;
+  if (baseUrl) {
+    try {
+      const parsed = new URL(baseUrl);
+      if (parsed.protocol === "http:" && isClaudeLoopbackHostname(parsed.hostname)) delete env.ANTHROPIC_BASE_URL;
+    } catch {
+      // Preserve a user-provided value that is not a parseable URL.
+    }
+  }
+
+  for (const name of NATIVE_STRIPPED_LEVERS) delete env[name];
+  const providerNames = Object.keys(config.providers);
+  for (const name of MODEL_ENV_SLOT_NAMES) {
+    const value = env[name];
+    if (value && isProxyOnlyModelId(value, providerNames)) delete env[name];
+  }
+  if (deps.allowRootSkipPermissions === true && !env.IS_SANDBOX) env.IS_SANDBOX = "1";
+  return env;
+}
+
+export function nativeModelOverride(
+  pickedModel: string | null,
+  configuredModel: string | undefined,
+  args: readonly string[],
+  providerNames: readonly string[] = [],
+): { flag?: string[]; warning?: string } {
+  if (!pickedModel || !isProxyOnlyModelId(pickedModel, providerNames)) return {};
+  if (args.some(arg => arg === "--model" || arg.startsWith("--model="))) return {};
+  const fallback = configuredModel?.trim();
+  if (fallback && !isProxyOnlyModelId(fallback, providerNames)) {
+    return {
+      flag: ["--model", fallback],
+      warning: `ℹ️ The saved model (${pickedModel}) requires the proxy. This native session will use ${fallback}.`,
+    };
+  }
+  return {
+    warning: `⚠ The saved model (${pickedModel}) requires the proxy. Use \`--model <Anthropic model>\` or select a native model in this session.`,
+  };
 }
 
 const CLAUDE_INSTALL_HINT = "❌ `claude` CLI not found. Install it first: npm install -g @anthropic-ai/claude-code";
@@ -418,8 +532,7 @@ export function rootSkipPermissionsNotice(env: ClaudeLaunchEnv): string {
 export async function cmdClaude(args: string[]): Promise<number> {
   const config = loadConfig();
   if (config.claudeCode?.enabled === false) {
-    console.error("Claude inbound is disabled (config.claudeCode.enabled=false — flip the Claude ON toggle in the GUI or edit config).");
-    return 1;
+    return launchNativeClaude(config, args, CLAUDE_NATIVE_ROUTING_OFF);
   }
   const clientState = readClientConnectionState();
   if (clientState.kind === "invalid" || clientState.kind === "mismatched") {
@@ -443,11 +556,13 @@ export async function cmdClaude(args: string[]): Promise<number> {
   } else {
     const port = await ensureProxyForClaude();
     if (!port) {
-      console.error("❌ Proxy did not become healthy after starting.");
-      return 1;
+      return launchNativeClaude(config, args, CLAUDE_NATIVE_NO_PROXY);
     }
+    const liveState = await fetchClaudeCodeState(config, port);
+    const plan = claudeLaunchPlan(true, true, liveState.enabled);
+    if (plan.kind === "native") return launchNativeClaude(config, args, plan.notice);
     route = port;
-    contextWindows = await fetchClaudeContextWindows(config, port);
+    contextWindows = liveState.contextWindows;
   }
   const allowRootSkipPermissions = shouldAllowRootSkipPermissions(args);
   const env = buildClaudeEnv(config, route, process.env, contextWindows, { allowRootSkipPermissions });
@@ -479,7 +594,27 @@ export async function cmdClaude(args: string[]): Promise<number> {
       console.error(`⚠ Claude agent definitions could not be synced: ${message}`);
     }
   }
-  return await new Promise<number>(resolve => {
+  return spawnClaude(args, env);
+}
+
+async function launchNativeClaude(config: OcxConfig, args: string[], notice: string): Promise<number> {
+  console.error(notice);
+  const providerNames = Object.keys(config.providers);
+  const override = nativeModelOverride(
+    readPickerDefaultModel(claudeConfigDir()),
+    config.claudeCode?.model,
+    args,
+    providerNames,
+  );
+  if (override.warning) console.error(override.warning);
+  const allowRootSkipPermissions = shouldAllowRootSkipPermissions(args);
+  const env = buildNativeClaudeEnv(config, process.env, { allowRootSkipPermissions });
+  if (allowRootSkipPermissions) console.error(rootSkipPermissionsNotice(env));
+  return spawnClaude([...(override.flag ?? []), ...args], env);
+}
+
+function spawnClaude(args: string[], env: ClaudeLaunchEnv): Promise<number> {
+  return new Promise<number>(resolve => {
     const inv = commandInvocation("claude", args);
     const child = spawn(inv.file, inv.args, { stdio: "inherit", env: env as NodeJS.ProcessEnv, ...inv.options });
     child.on("error", (err: NodeJS.ErrnoException) => {
