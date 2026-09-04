@@ -37,11 +37,11 @@ Columns: item, work-phase, outcome, evidence (merge sha / issue state / posted U
 | 3352 | wp4 | pending | security-review class |
 | 3433 | wp5 | pending | provenance decision required |
 | 3424 | wp5 | pending | |
-| 3320 | wp6 | pending | local Windows repro permitted |
-| 3279 | wp6 | pending | |
-| 3255 | wp6 | pending | reclassify to enhancement |
-| 3245 | wp6 | pending | upstream-tracking |
-| 1527 | wp6 | pending | |
+| 3320 | wp6 | NEEDS-INFO, posted | comment 5537325501: SID form is already accepted, so the suspect is identity resolution |
+| 3279 | wp6 | NEEDS-INFO, posted | comment 5537346000: named 3 captures; origin mismatch is the lead hypothesis |
+| 3255 | wp6 | RECLASSIFIED enhancement | comment 5537334610; label bug -> enhancement applied |
+| 3245 | wp6 | NEEDS-INFO, posted | comment 5537342024: filed on 2.39.0, dev is 2.43.0; re-test asked |
+| 1527 | wp6 | CLOSED completed | reporter confirmed non-reproduction on 2.41.0; cache finding routed to #3433 |
 
 ## Rules for writing a row
 
@@ -98,3 +98,36 @@ Worth recording as a process note: the merge train verified each PR against its 
 CI, which is what the instructions asked for, and that was still not sufficient. Nothing in
 the per-PR gate models the combination. The dev run after the last merge is the only place
 the interaction shows up.
+
+## wp6 disposition record
+
+Five needs-info issues, all dispositioned visibly on the issue itself rather than in a note.
+
+**#1527 closed.** The reporter came back with measurements on 2.41.0 showing the
+large-context collapse no longer reproduces: 99k-157k input per turn completing normally,
+kimi-k3 returning 1985 tokens at 153k input across 4 tool loops, and a loopback series
+running on `continuationMode=checkpoint` with every turn ending `expectedClose: true`.
+That is the inverse of the reported defect on the same account, so the issue is resolved.
+Their separate observation -- `cacheReadTokens=489972` direct versus `cached_tokens=0`
+through the proxy -- was routed to #3433 rather than allowed to keep a closed issue alive,
+because it is the same shape as the bridge finding recorded in `040_wp5`.
+
+**#3255 reclassified.** The report argued it was "a small parameter-coupling defect". The
+code disagrees: reasoning effort and service tier are already separate catalog axes, so
+splitting the combined desktop control is designing a new control surface, not repairing a
+coupled one. Relabeled `bug` -> `enhancement` with the three product questions that
+actually block it, since answering them by inference would be inventing intent.
+
+**#3320 kept open with a narrowed hypothesis.** The reporter supplied the `<UserId>` in SID
+form. Reading `src/service.ts`, `cachedWindowsTaskUserIds()` returns BOTH `identity.sid` and
+`identity.name` and the trigger validator accepts either, so a SID-form UserId and a
+non-ASCII display name are not themselves the rejection. The remaining suspect is identity
+RESOLUTION failing outright, which makes `resolveWindowsTaskDiagnosticUserId` return null
+and fails a scoped trigger regardless of correctness. Asked for an unpatched status plus the
+`<Triggers>` block, specifically whether the element is namespace-prefixed.
+
+**#3245 and #3279 kept open with specific captures requested.** #3245 was filed against
+2.39.0 while dev is on 2.43.0, so a re-test is the only honest next step. #3279 got three
+named captures with the origin-binding mismatch called out as the lead hypothesis, including
+the note that if that is the cause, the real defect is reporting a session problem as
+"cannot connect to proxy".
