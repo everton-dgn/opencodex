@@ -519,7 +519,7 @@ bun test <63개 파일>
 | V2 | `bun test tests/responses-parser.test.ts` | 0 | 읽는다 — §4.2 새 블록이 이 파일에 있고 `parseRequest` 를 직접 호출한다. **단 `core.ts` 가드는 보지 못한다** — 파서 단위 관측 전용이다 |
 | V3 | `bun test tests/responses-compaction-routing.test.ts` | 0 | 읽는다 — `handleResponses` 를 통과하므로 §4.1 가드 코드를 **실제로 실행**한다. routedCompaction이 가드에 걸리지 않아야 함을 여기서 판정한다. 안 B 초기 위치(무조건 검사)에서 실제 red를 봤다 |
 | V4 | `bun test tests/openai-responses-passthrough.test.ts tests/responses-compaction-routing.test.ts` | 0 | 읽는다 — **V4가 이 변경을 관측하는 커맨드다**. 초판이 지목한 `:2343` 단독 테스트는 `adapter.buildRequest({_rawBody})` 직접 호출이라(`:2368`) `core.ts` 를 우회해 **아무것도 관측하지 못한다**. compaction 파일이 `handleResponses` 경유로 가드를 실행하므로 둘을 **함께** 돌려야 passthrough 보존을 실제로 증명한다. 실측 176 pass / 0 fail |
-| V5 | 63파일 전수 (§7.1 목록) | 3 fail = baseline | 읽는다 — 55개 파일이 `handleResponses` 를 호출하므로 가드 코드가 광범위하게 실행된다. baseline과 동일해야 통과 |
+| V5 | 63파일 전수 (§7.1 목록) | 3 fail = baseline | 읽는다 — 63개 중 **18개**가 `handleResponses` 를 호출하므로 가드 코드가 실제로 실행된다(실측: `xargs rg -l 'handleResponses' < 후보목록 \| wc -l` → 18). 나머지 45개는 어댑터/파서 단위라 가드에 도달하지 않지만, 후보 수집이 표본이 아니라 전수임을 보이는 것이 이 행의 목적이다. baseline과 동일해야 통과 |
 
 **금지**: `bun run test`, 인자 없는 `bun test`. V5는 rg로 수집한 명시적 파일 목록 실행이지
 전체 스위트가 아니다(전체는 ~850파일, V5는 63파일).
@@ -639,4 +639,3 @@ PR은 `dev` 를 target하고 설명에 `Closes #3259` 를 넣는다. `dev` 는 d
 초판은 6개 파일을 골라 돌리고 "추가 피해 0건"이라고 적었다. v2는 rg로 65개 후보를 전수 수집해
 63개를 돌렸고, 그 과정에서 **baseline에 이미 3건의 기존 실패가 있다**는 사실을 발견했다(§7.2).
 표본만 돌렸다면 이 3건을 자기 회귀로 오인하거나, 반대로 진짜 회귀를 놓쳤을 것이다.
-
