@@ -70,3 +70,18 @@ Holding it would have kept `dev` red for the duration.
 on four runs across three unrelated branches, so it predates this work. Filed rather than
 worked around, per the standing instruction about Windows failures.
 
+## Final dev state: green
+
+`dev` at `5ea3f2089` passes every job — `test 1/4` through `4/4`, `macos`, `gates`, the three
+keyring jobs, `storage policy`, `api usage`, and `ci`.
+
+Reading the intermediate red honestly matters here. The run on `8401b68db` — this unit's own
+repair commit — was still red, and it would have been easy to read that as the repair having
+failed. It had not: every failure on that sha traced to `tests/oauth-manual-code.test.ts:63`
+tripping `privacy:scan` on a Muse key fixture introduced by #3437, which is why `gates` and
+the `macos` suite both failed with the same message. #3443 fixed that fixture, and on the
+next sha the shards that this unit repaired — `test 2/4` and `test 3/4` — are green.
+
+Two separate regressions overlapped on the same branch within the same hour, from different
+authors, and each initially looked like the other's. Attributing a red run to the change that
+happens to be on top of it is the mistake that was available at every step here.
