@@ -36,6 +36,7 @@ describe("rewriteSpecifier", () => {
     (s: string) => `const r = require("${s}");`,
     (s: string) => `const u = import.meta.resolve("${s}");`,
     (s: string) => `const f = new URL("${s}", import.meta.url);`,
+    (s: string) => `mock.module("${s}", () => ({}));`,
   ];
 
   test("every declared prefix is rewritten for depth 1 and 2 in every syntax form", () => {
@@ -114,12 +115,26 @@ describe("scanEscapes", () => {
     expect(scanEscapes(src)).toEqual([]);
   });
 
-  test("a file that already binds repoRoot is left for the scanner instead of being shadowed", () => {
+  test("a local repoRoot binding is rebound through an aliased import; other helper-named locals stop the rewrite", () => {
     const src = 'import { join } from "node:path";\nconst repoRoot = join(import.meta.dir, "..");\nconst read = (rel: string) => readFileSync(join(repoRoot, rel), "utf8");\n';
     const out = rewriteMetaDirEscapes(src, 1);
-    expect(out.rewrites).toBe(0);
-    expect(out.source).toBe(src);
-    expect(scanEscapes(src).map(h => h.line)).toEqual([2]);
+    expect(out.rewrites).toBe(1);
+    expect(out.source.split("\n")[1]).toBe('import { repoRoot as resolveRepoRoot } from "../helpers/repo-root";');
+    expect(out.source).toContain("const repoRoot = resolveRepoRoot();");
+    expect(out.source).toContain('readFileSync(join(repoRoot, rel), "utf8")');
+    expect(scanEscapes(out.source)).toEqual([]);
+
+    const url = 'import { join } from "node:path";\nconst root = new URL("../../", import.meta.url);\nconst t = await Bun.file(new URL(p, root)).text();\n';
+    const outUrl = rewriteMetaDirEscapes(url, 2);
+    expect(outUrl.source).toContain('const root = pathToFileURL(repoRoot() + "/");');
+    expect(outUrl.source).toContain('import { pathToFileURL } from "node:url";');
+    expect(outUrl.source).toContain('import { repoRoot } from "../../helpers/repo-root";');
+
+    const other = 'import { join } from "node:path";\nconst repoPath = (x: string) => x;\nconst s = join(import.meta.dir, "..", "src");\n';
+    const outOther = rewriteMetaDirEscapes(other, 1);
+    expect(outOther.rewrites).toBe(0);
+    expect(outOther.source).toBe(other);
+    expect(scanEscapes(other).map(h => h.line)).toEqual([3]);
   });
 
   test("resolve/dirname/fileURLToPath and multi-line import blocks are handled", () => {
@@ -173,6 +188,7 @@ describe("scanEscapes", () => {
     expect(scanEscapes('const r = resolve(\n  import.meta.dir,\n  "..",\n);')).toHaveLength(1);
     expect(scanEscapes('const t = `${import.meta.dir}/../src/x.ts`;')).toHaveLength(1);
     expect(scanEscapes('const u = pathToFileURL(join(import.meta.dir, "../src/lib/x.ts")).href;')).toHaveLength(1);
+    expect(scanEscapes('const s = await Bun.file(new URL(file, import.meta.url)).text();')).toHaveLength(1);
     expect(scanEscapes("const self = import.meta.path;")).toEqual([]);
   });
 });
