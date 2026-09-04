@@ -1229,6 +1229,7 @@
   },
   "migrated": [
     "adapters",
+    "ci-workflows",
     "claude-integration",
     "cli",
     "clients",
@@ -1241,7 +1242,9 @@
     "providers",
     "responses",
     "routing",
+    "server",
     "service",
+    "storage",
     "update",
     "usage",
     "vision",
