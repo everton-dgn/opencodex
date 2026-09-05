@@ -637,7 +637,7 @@ function anthropicFamilyContextWindow(
   record: Record<string, number> | undefined,
   id: string,
 ): number | undefined {
-  if (!record || !id.startsWith("claude-")) return undefined;
+  if (!record || !id.toLowerCase().startsWith("claude-")) return undefined;
   let candidate = id;
   while (true) {
     const cut = candidate.lastIndexOf("-");

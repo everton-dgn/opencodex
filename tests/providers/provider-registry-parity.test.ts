@@ -839,7 +839,9 @@ describe("provider registry parity", () => {
     }).contextWindow;
 
     expect(contextWindow("claude-fable-5-2")).toBe(1_000_000);
+    expect(contextWindow("Claude-fable-5-2")).toBe(1_000_000);
     expect(contextWindow("claude-haiku-4-5-20251001")).toBe(200_000);
+    expect(contextWindow("CLAUDE-HAIKU-4-5-20251001")).toBe(200_000);
     expect(contextWindow("claude-opus-4-1-20250805")).toBeUndefined();
     expect(contextWindow("claude-3-7-sonnet-20250219")).toBeUndefined();
   });
