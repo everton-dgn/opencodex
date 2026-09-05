@@ -6,6 +6,21 @@ description: Provider entries, authentication, endpoints, model catalogs, quotas
 A provider tells opencodex where a model lives, which wire adapter it speaks, and how requests are
 authenticated.
 
+## Initial model selection
+
+New non-OAuth connections wait for a reliable model list before exposing models. If that list contains at least 20 distinct Models-tab rows, all model switches start OFF; the provider itself stays ACTIVE. OAuth and ChatGPT-login connections keep their defaults, based on the effective authentication mode.
+
+This runs only for a new provider registration. Existing selections survive updates, re-login and key replacement. After initialization, enable the models you need in Models or with the CLI below; the separate new-model-arrival policy is unchanged. Replace `<model-id>` with an ID from the list.
+
+```sh
+ocx models live --provider openrouter
+ocx models enable '<model-id>'
+ocx models disable '<model-id>'
+ocx models provider openrouter on
+```
+
+After GUI registration or OAuth login, the confirmation dialog lets you open the Models page. CLI registration and login print model-management commands; JSON includes structured next steps. `--no-wait` reports pending login, not completion. Start the proxy with `ocx start` before using live model commands.
+
 ## Provider-related top-level fields
 
 | Field | Type | Default | Meaning |
@@ -13,11 +28,12 @@ authenticated.
 | `providers` | `Record<string, OcxProviderConfig>` | — | Map of provider name to provider config. |
 | `openaiProviderTierVersion?` | `2` | set by migration | Marks the single option-aware OpenAI projection as complete. |
 | `disabledModels?` | `string[]` | — | Models hidden from Codex's catalog and `/v1/models`, but not blocked from direct proxy calls. A routed id is removed from listings. An account-qualified native id hides only that selector row; a bare native GPT id hides the bare row and every account-selector row for that model. The dashboard Models page exposes only routed and bare native rows; use this configuration field directly to hide one selector-qualified row. |
-| `providerContextCaps?` | `Record<string, number>` | `{}` | Per-provider Codex-visible context caps. A cap only lowers a known context window. |
-| `contextCapValue?` | `number` | `350000` | Default value used by the dashboard context-cap controls. Changing it applies the value to every routed provider — including providers without an existing `providerContextCaps` entry — only when "apply to every routed provider" is toggled on; otherwise each provider keeps its own cap. |
+| `providerContextCaps?` | `Record<string, number>` | `{}` | Active provider context limits. Ordinary windows are lowered; native models with a supported long window can expand only up to their own supported ceiling. |
+| `providerContextCapValues?` | `Record<string, number>` | `{}` | Last selected provider limits, retained while disabled. These values do not activate a cap. An enabled value takes precedence over a remembered value. |
+| `contextCapValue?` | `number` | `350000` | Default used on first enable. A later enable restores the selected provider value. Updating the global value with `setAll: true` changes enabled caps only; `setAll: true` without a value enables all configured providers at the current global value. |
 | `codexAccounts?` | `CodexAccount[]` | `[]` | ChatGPT/Codex pool account metadata managed by Codex Auth. Secrets live separately in `codex-accounts.json`. |
 | `pausedCodexAccountIds?` | `string[]` | `[]` | Accounts excluded from Pool selection until resumed, including the main `__main__` account when paused. |
-| `codexQuotaAutoRefresh?` | `Record<string, object>` | `{}` | Per-Codex-login-account opt-in for automatic `fiveHour` and `weekly` window activation in Pool mode, which selects among the main and added accounts; Direct mode uses only the current account and does not run this pool worker. The setting is actionable only when the account's live WHAM payload reports the selected window; absent windows have no dashboard control, and API writes attempting to enable an unavailable window return HTTP 409 (disable writes are accepted so stale settings can be cleared). The Providers/Codex Auth account-pool UI and `/api/settings` manage this field without replacing unrelated settings. At a reported reset time, opencodex sends one minimal non-stored Codex message through that account and persists the activated reset timestamp. This does not apply to API-key providers. |
+| `codexQuotaAutoRefresh?` | `Record<string, object>` | `{}` | Per-Codex-login-account opt-in for automatic `fiveHour` and `weekly` window activation in Pool mode; Direct mode does not run this worker. In Providers/Codex Auth **Advanced settings**, one control enables or disables both supported windows across all current main and added accounts. New accounts are not opted in automatically. Enable skips windows absent from live WHAM data; disable also clears stale enabled windows. The UI reuses granular `/api/settings` writes, reconciles partial failures, and retries the original ON/OFF intent without replacing unrelated settings or completed reset markers. The API still rejects enabling an unavailable window with HTTP 409. At a reported reset time, opencodex sends one minimal non-stored Codex message using that account's quota and persists the activated timestamp. This does not apply to API-key providers. |
 | `codexAccountNamespaces?` | `Record<string, string>` | — | Optional map from an arbitrary public model selector to a stored Codex account target. When account-qualified picker rows are enabled, each selector whose target is present adds separate `<selector>/<native-openai-model>` rows to the Codex picker; each row uses only that account. With any selector active, bare native rows are hidden in the picker, but their ids remain routable and listed by raw `/v1/models` unless explicitly disabled. |
 | `codexAccountPickerEnabled?` | `boolean` | off when the map is empty | Controls whether eligible `codexAccountNamespaces` mappings generate account-qualified Codex picker rows. `true` allows mapped rows to appear. If omitted with a non-empty map, it is treated as enabled for backward compatibility; if the map is empty, it is off. `false` hides generated rows and restores bare native picker rows without deleting mappings or disabling exact `<selector>/<native-openai-model>` routing. |
 | `activeCodexAccountId?` | `string` | — | Manually selected Pool account for the next request. Selection clears thread affinity; in-flight requests keep captured credentials. |
@@ -147,7 +163,7 @@ predictions. Explicit provider/model price overrides still take precedence.
 | `modelSupportsReasoningSummaries?` | `Record<string, boolean>` | Set a model to `false` to stop advertising summaries and strip summary-delivery fields. |
 | `modelReasoningSummaryDelivery?` | `Record<string, "sequential" \| "sequential_cutoff" \| "concurrent" \| "concurrent_cutoff">` | Per-model Responses delivery enum; rewrites an existing delivery field. |
 | `modelAdapters?` | `Record<string, string>` | Per-model `openai-chat` or `openai-responses` wire override for mixed-wire gateways. Explicit entries beat registry defaults. The OpenCode Go preset selects Responses for `gpt-5.6-luna` while leaving sibling models on their documented wires; DeepSeek can select native Responses for `deepseek-v4-flash`; and GitHub Copilot declares Responses-only defaults for its GPT-5 family (`gpt-5.3-codex`, `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.5`, `gpt-5.6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`) because those models reject `/chat/completions` for agent traffic. Models without a built-in default (for example `gpt-5.4-nano`) can be opted in here. Single-wire upstream pins and canonical ChatGPT forward reject overrides. |
-| xAI Responses opt-in (dashboard) | switch | For `xai` only, atomically sets or clears the `grok-4.5` and `grok-4.6` `modelAdapters` entries. A hand-edited single entry appears as mixed until the next switch write normalizes both. Other overrides and tier behavior are unchanged. |
+| xAI Chat Completions (dashboard / CLI) | switch | Grok 4.5/4.6 OAuth Responses requests default to Responses. Existing Chat overrides are migrated once on upgrade; later Chat choices are preserved. Turn on to select Chat for both models, off to select Responses. CLI: `ocx provider edit xai --xai-chat on` or `--xai-chat off` (running proxy required). Mixed means only one model currently uses Chat. Other overrides and tier policy stay unchanged. API-key and translated Chat/Anthropic defaults are unchanged. |
 | `xaiResponsesXSearch?` | `boolean` | Disabled by default. On an xAI Responses destination, append the provider-hosted `x_search` declaration only when a live `web_search` tool survives final request normalization. Existing declarations are not duplicated, caller `tool_choice`/`allowed_tools` selectors are never widened, and this is separate from the web-search sidecar's `search.xSearch` options. |
 | `modelPreferHostedTools?` | `Record<string,string[]>` | Exact-model opt-in for non-forward Responses gateways that reserve a hosted-tool namespace. Currently accepts only `["image_generation"]`; a matching model must use the `openai-responses` wire and support that hosted tool. It removes colliding client `image_gen` declarations and rewrites their selectors to preserve caller tool choice. For OpenAI API virtual `-pro` models, the selected public ID is matched first and the resolved base wire-model ID is a fallback. `modelAdapters` resolves the public ID first, then the base ID; the second resolution determines the final wire. Other models retain normal alias behavior. |
 | `annotateEmptyToolOutputs?` | `boolean` | Replace a present-but-empty tool result with a short marker before it reaches the model, so a blank result is not read as a missing one. Applies to blank strings and text-only part arrays; image, file, and encrypted parts are never touched. Defaults to `true` for DeepSeek from the built-in registry and is otherwise unset. Set `false` to opt a provider out — an explicit `false` is preserved across later edits that omit the field. `PATCH /api/providers?name=<provider>` accepts `true`, `false`, or `null` to clear the override and return to registry-default behavior. |
@@ -802,3 +818,51 @@ ids with context `922000` and max input `922000`; OpenRouter seeds `openai/gpt-5
   "visionSidecar": { "enabled": true }
 }
 ```
+
+## OpenCode Go reasoning efforts
+
+Go catalog rows preserve their configured reasoning efforts exactly, including during
+catalog sync. OpenCodex does not append synthetic `max` or `ultra` choices to these rows.
+Use `modelReasoningEfforts` and `modelDefaultReasoningEfforts` for each model's accepted
+upstream values. Key these per-provider maps by upstream model ID, not the routed
+`opencode-go/<model-id>` catalog slug. For example, a configured `["high", "max"]` list
+remains exactly those two choices; a configured `["high", "xhigh"]` list does not gain `max`.
+See the [OpenCode Go model list](https://opencode.ai/docs/go/#models) for the current roster.
+A configured subset can exclude the lower tiers. Other providers retain their existing behavior.
+
+For a native-first picker, include native ids in `modelPickerOrder` followed by the
+routed ids. This orders the complete picker while preserving OpenCodex's separate natural-priority
+guidance calculation. Native Codex's advertised five follow picker priority and may change;
+exact-name override eligibility is not limited to that advertisement. Routed-only orders keep
+their previous behavior. See the
+[ordering migration note](/guides/model-ordering/#migration-note-native-ids-in-existing-orders).
+`modelDisplayNames` on a provider controls readable labels without changing wire ids.
+
+## OpenCode Go session and agent messages
+
+With the [`openai-responses` adapter](/reference/adapters/#openai-responses) and
+base URL `https://opencode.ai/zen/go/v1`, plaintext Codex `agent_message` items
+become user messages when `authMode` is not `"forward"` (for example, `"key"`).
+Providers using `authMode: "forward"` retain these items unchanged. This conversion is scoped to that destination, including
+renamed provider entries; other Responses destinations keep their input unchanged.
+Author and recipient remain explicit text metadata, and the content parts are preserved.
+Encrypted and unknown content is not normalized; native encrypted tasks still require the
+separate opt-in [task recovery](/reference/configuration/agents/#encrypted-v2-task-recovery).
+
+With task recovery enabled, replayed `NEW_TASK` and `MESSAGE` items reuse a cached assignment only
+after validating the caller and matching the parent-thread scope. Replay restoration
+does not make a new recovery request or extend cache expiry. Expired or unseen
+ciphertext is not replaced. Fresh encrypted `NEW_TASK` and `MESSAGE` items use the same
+opt-in recovery path, including native-parent `send_message` delivery. Message type,
+sender, recipient, parent scope and caller credentials remain part of validation or cache identity.
+
+When a request contains several agent messages, cached replay restoration checks each
+message independently. The cache separates message type, sender, recipient and ciphertext
+within the admitted caller/account and parent scope. Fresh recovery only handles the
+current tail message (ignoring trailing `compaction_trigger` or `additional_tools` metadata).
+It does not batch-recover unseen historical messages; those remain unchanged. A cache miss
+or expiry does not extend the history-recovery contract.
+
+Sender and recipient on Go Responses are context for the receiving model, not a new
+machine-readable routing protocol. Tool routing continues to use the existing collaboration
+contracts.

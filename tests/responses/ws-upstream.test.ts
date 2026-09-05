@@ -1,8 +1,9 @@
-import { afterEach, describe, expect, jest, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, jest, test } from "bun:test";
 import { providerFetch } from "../../src/server/responses/fetch-helpers";
 import { handleResponses } from "../../src/server/responses";
 import { isEagerRelaySseResponse } from "../../src/server/relay";
 import { isWin32EagerRewrite } from "../../src/lib/bun-stream-caps";
+import { CodexWsMetadata, CODEX_WS_METADATA_MAX_BYTES, CODEX_WS_METADATA_MAX_VALUE_BYTES } from "../../src/server/responses/codex-ws-metadata";
 import {
   bunSupportsBoundedCodexWsRelay,
   CODEX_WS_CREATE_FRAME_LIMIT_BYTES,
@@ -13,6 +14,7 @@ import {
   MAX_CODEX_WS_CREATE_FRAME_BYTES,
   MAX_CODEX_WS_FRAME_BYTES,
   MAX_CODEX_WS_QUEUE_BYTES,
+  CODEX_WS_RESPONSE_PRELUDE_TIMEOUT_MS,
   shouldUseCodexWsUpstream as rawShouldUseCodexWsUpstream,
 } from "../../src/server/responses/ws-upstream";
 import type { OcxProviderConfig } from "../../src/types";
@@ -160,18 +162,24 @@ describe("shouldUseCodexWsUpstream", () => {
 });
 
 type Listener = (event: unknown) => void;
+type FakeWebSocketOptions = {
+  headers?: Record<string, string>;
+  proxy?: string;
+};
 
 /** Minimal scriptable stand-in for Bun's WebSocket. */
 class FakeWebSocket {
   static instances: FakeWebSocket[] = [];
   static script: (ws: FakeWebSocket) => void = () => {};
   url: string;
+  options?: FakeWebSocketOptions;
   sent: string[] = [];
   closed = false;
   listeners = new Map<string, Listener[]>();
 
-  constructor(url: string) {
+  constructor(url: string, options?: FakeWebSocketOptions) {
     this.url = url;
+    this.options = options;
     FakeWebSocket.instances.push(this);
     queueMicrotask(() => FakeWebSocket.script(this));
   }
@@ -184,6 +192,10 @@ class FakeWebSocket {
 
   emit(type: string, event: unknown = {}) {
     for (const listener of this.listeners.get(type) ?? []) listener(event);
+  }
+
+  removeEventListener(type: string, listener: Listener) {
+    this.listeners.set(type, (this.listeners.get(type) ?? []).filter(value => value !== listener));
   }
 
   send(data: string) {
@@ -199,12 +211,23 @@ class FakeWebSocket {
 
 const RealWebSocket = globalThis.WebSocket;
 const RealFetch = globalThis.fetch;
+const PROXY_ENV_KEYS = ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "all_proxy", "no_proxy"] as const;
+let savedProxyEnv: Record<string, string | undefined>;
+
+beforeEach(() => {
+  savedProxyEnv = Object.fromEntries(PROXY_ENV_KEYS.map(key => [key, process.env[key]]));
+  for (const key of PROXY_ENV_KEYS) delete process.env[key];
+});
 
 afterEach(() => {
   globalThis.WebSocket = RealWebSocket;
   globalThis.fetch = RealFetch;
   FakeWebSocket.instances = [];
   FakeWebSocket.script = () => {};
+  for (const key of PROXY_ENV_KEYS) delete process.env[key];
+  for (const key of PROXY_ENV_KEYS) {
+    if (savedProxyEnv[key] !== undefined) process.env[key] = savedProxyEnv[key];
+  }
 });
 
 function installFake(script: (ws: FakeWebSocket) => void) {
@@ -461,6 +484,99 @@ describe("isWin32EagerRewrite", () => {
 });
 
 describe("codexWsUpstreamFetch", () => {
+  test("the complete HTTP adapter dispatch maps Lite and final routing intent onto the actual WS", async () => {
+    const frames: Record<string, unknown>[] = [];
+    const seenHeaders: Record<string, string>[] = [];
+    class CapturingSocket extends FakeWebSocket {
+      constructor(url: string, options?: { headers?: Record<string, string> }) {
+        super(url);
+        seenHeaders.push(options?.headers ?? {});
+      }
+      send(data: string) { super.send(data); frames.push(JSON.parse(data)); }
+    }
+    FakeWebSocket.script = ws => {
+      ws.emit("open", {});
+      ws.emit("message", { data: JSON.stringify({ type: "response.completed", response: { id: "r1", status: "completed", output: [] } }) });
+    };
+    globalThis.WebSocket = CapturingSocket as unknown as typeof WebSocket;
+    const response = await handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: { authorization: "Bearer fixture", "content-type": "application/json", "x-openai-internal-codex-responses-lite": "true" },
+      body: JSON.stringify({ model: "gpt-5.5", input: "hello", stream: true, service_tier: "priority" }),
+    }), {
+      defaultProvider: "openai", providers: { openai: { adapter: "openai-responses", authMode: "forward", codexAccountMode: "direct", baseUrl: "https://chatgpt.com/backend-api/codex" } },
+    } as OcxConfig, { model: "", provider: "" }, { codexWsRuntimeIdentity: BOUNDED_WS_RUNTIME });
+    await response.text();
+    expect(frames).toHaveLength(1);
+    expect(frames[0].client_metadata).toEqual({ ws_request_header_x_openai_internal_codex_responses_lite: "true" });
+    expect(seenHeaders[0]["x-codex-routing-hint"]).toBe("model=gpt-5.5;tier=priority");
+  });
+
+  test("projects canonical WS prelude into the HTTP response before committing headers", async () => {
+    installFake(ws => {
+      ws.emit("open", {});
+      ws.emit("message", { data: JSON.stringify({
+        type: "codex.rate_limits",
+        rate_limits: { primary: { used_percent: 31, window_minutes: 10080, reset_at: 1900000000 } },
+        credits: { has_credits: true, unlimited: false, balance: "12.5" },
+      }) });
+      ws.emit("message", { data: JSON.stringify({
+        type: "codex.response.metadata",
+        headers: { "x-models-etag": "catalog-v2", "x-codex-turn-state": "turn-state", authorization: "must-not-leak", "set-cookie": "must-not-leak" },
+      }) });
+      ws.emit("message", { data: JSON.stringify({ type: "response.created", response: { id: "r1" } }) });
+      ws.emit("message", { data: JSON.stringify({ type: "response.completed", response: { id: "r1", status: "completed" } }) });
+    });
+    const response = await codexWsUpstreamFetch(CODEX_URL, streamingInit(), (() => {
+      throw new Error("fallback must not run");
+    }) as unknown as typeof fetch);
+    expect(response.headers.get("x-codex-primary-used-percent")).toBe("31");
+    expect(response.headers.get("x-codex-primary-window-minutes")).toBe("10080");
+    expect(response.headers.get("x-codex-credits-balance")).toBe("12.5");
+    expect(response.headers.get("x-models-etag")).toBe("catalog-v2");
+    expect(response.headers.get("x-codex-turn-state")).toBe("turn-state");
+    expect(response.headers.has("authorization")).toBe(false);
+    expect(response.headers.has("set-cookie")).toBe(false);
+    const text = await response.text();
+    expect(text).toContain("response.completed");
+    expect(text).not.toContain("must-not-leak");
+  });
+
+  test("passes the selected proxy without changing handshake headers", async () => {
+    process.env.HTTPS_PROXY = "http://proxy.example:8080";
+    installFake(ws => {
+      ws.emit("open", {});
+      ws.emit("message", { data: JSON.stringify({ type: "response.completed", response: {} }) });
+    });
+
+    await codexWsUpstreamFetch(CODEX_URL, streamingInit(), (() => {
+      throw new Error("fallback must not run");
+    }) as unknown as typeof fetch);
+
+    const options = FakeWebSocket.instances[0]!.options;
+    expect(options?.proxy).toBe("http://proxy.example:8080");
+    expect(options?.headers?.authorization).toBe("Bearer test");
+    expect(options?.headers?.["openai-beta"]).toContain("responses_websockets");
+    expect(options?.headers?.["content-type"]).toBeUndefined();
+  });
+
+  test.each([
+    ["unsupported protocol", "socks5://proxy.example:1080"],
+    ["invalid URL", "not a proxy URL"],
+  ])("falls back once without dialing for an %s", async (_label, proxy) => {
+    process.env.HTTPS_PROXY = proxy;
+    const sentinel = new Response("sse-fallback");
+    let fallbackCalls = 0;
+    const response = await codexWsUpstreamFetch(CODEX_URL, streamingInit(), (async () => {
+      fallbackCalls += 1;
+      return sentinel;
+    }) as typeof fetch);
+
+    expect(response).toBe(sentinel);
+    expect(fallbackCalls).toBe(1);
+    expect(FakeWebSocket.instances).toHaveLength(0);
+  });
+
   test("relays event frames as an SSE response and sends one response.create frame", async () => {
     installFake(ws => {
       ws.emit("open", {});
@@ -476,8 +592,8 @@ describe("codexWsUpstreamFetch", () => {
     expect(response.headers.get("content-type")).toContain("text/event-stream");
     expect(isCodexWsUpstreamResponse(response)).toBe(true);
     const text = await response.text();
-    // WS-only frames are dropped so clients see the exact SSE surface they always got.
-    expect(text).not.toContain("codex.rate_limits");
+    // Native control frames remain available; stock HTTP clients use their prelude headers.
+    expect(text).toContain("codex.rate_limits");
     expect(text).toContain("event: response.created");
     expect(text).toContain('data: {"type":"response.output_text.delta","delta":"hi"}');
     expect(text).toContain("event: response.completed");
@@ -519,6 +635,24 @@ describe("codexWsUpstreamFetch", () => {
     expect(text).toContain("event: error");
     expect(text).toContain("upstream refused the turn");
     expect(FakeWebSocket.instances[0].closed).toBe(true);
+  });
+
+  test.each(["error", "response.completed"])("multiline upstream %s JSON remains one valid SSE data value", async type => {
+    const payload = type === "error"
+      ? { type, status: 400, error: { type: "invalid_request_error", message: "fixture refusal" } }
+      : { type, response: { id: "pretty-response", status: "completed", output: [] } };
+    installFake(ws => {
+      ws.emit("open", {});
+      ws.emit("message", { data: JSON.stringify(payload, null, 2) });
+    });
+    const response = await codexWsUpstreamFetch(CODEX_URL, streamingInit(), (async () => {
+      throw new Error("a sent multiline response cannot fall back");
+    }) as typeof fetch);
+    const text = await response.text();
+    const data = text.split("\n").filter(line => line.startsWith("data: "));
+    expect(data).toHaveLength(1);
+    expect(JSON.parse(data[0]!.slice(6))).toEqual(payload);
+    expect(FakeWebSocket.instances[0]!.closed).toBe(true);
   });
 
   test("normalizes the Responses WebSocket response.done terminal to SSE", async () => {
@@ -572,6 +706,7 @@ describe("codexWsUpstreamFetch", () => {
   });
 
   test("falls back to the HTTP fetch when the upgrade is rejected before open", async () => {
+    process.env.HTTPS_PROXY = "http://proxy.example:8080";
     installFake(ws => ws.close());
     const sentinel = new Response("sse-fallback", { status: 429 });
     let fallbackCalls = 0;
@@ -584,6 +719,7 @@ describe("codexWsUpstreamFetch", () => {
     expect(response).toBe(sentinel);
     expect(isCodexWsUpstreamResponse(response)).toBe(false);
     expect(fallbackCalls).toBe(1);
+    expect(FakeWebSocket.instances[0]!.options?.proxy).toBe("http://proxy.example:8080");
   });
 
   test("falls back to the HTTP fetch when the upgrade deadline elapses without open or close", async () => {
@@ -718,15 +854,17 @@ describe("codexWsUpstreamFetch", () => {
   });
 
   test("preserves caller headers on the handshake without fabricating an originator", async () => {
-    const seen: Record<string, string>[] = [];
+    process.env.HTTPS_PROXY = "http://proxy.example:8080";
+    process.env.NO_PROXY = "chatgpt.com:443";
+    const seen: FakeWebSocketOptions[] = [];
     FakeWebSocket.script = ws => {
       ws.emit("open", {});
       ws.emit("message", { data: JSON.stringify({ type: "response.completed", response: {} }) });
     };
     class HeaderCapturingWebSocket extends FakeWebSocket {
-      constructor(url: string, options?: { headers?: Record<string, string> }) {
-        super(url);
-        seen.push(options?.headers ?? {});
+      constructor(url: string, options?: FakeWebSocketOptions) {
+        super(url, options);
+        seen.push(options ?? {});
       }
     }
     globalThis.WebSocket = HeaderCapturingWebSocket as unknown as typeof WebSocket;
@@ -735,18 +873,19 @@ describe("codexWsUpstreamFetch", () => {
     await codexWsUpstreamFetch(CODEX_URL, streamingInit(), fallback);
     // Without a caller originator none is invented: pool/forward traffic must
     // not impersonate Codex CLI (metadata-integrity contract).
-    expect(seen[0].originator).toBeUndefined();
-    expect(seen[0]["openai-beta"]).toContain("responses_websockets");
-    expect(seen[0].authorization).toBe("Bearer test");
+    expect(seen[0].proxy).toBeUndefined();
+    expect(seen[0].headers?.originator).toBeUndefined();
+    expect(seen[0].headers?.["openai-beta"]).toContain("responses_websockets");
+    expect(seen[0].headers?.authorization).toBe("Bearer test");
     // HTTP body-framing headers do not belong on a WS handshake.
-    expect(seen[0]["content-type"]).toBeUndefined();
+    expect(seen[0].headers?.["content-type"]).toBeUndefined();
 
     // A genuine caller originator is forwarded verbatim.
     await codexWsUpstreamFetch(CODEX_URL, {
       ...streamingInit(),
       headers: { ...streamingInit().headers as Record<string, string>, originator: "codex_cli_rs" },
     }, fallback);
-    expect(seen[1].originator).toBe("codex_cli_rs");
+    expect(seen[1].headers?.originator).toBe("codex_cli_rs");
   });
 
   test("aborting before open rejects like an aborted fetch", async () => {
@@ -760,18 +899,193 @@ describe("codexWsUpstreamFetch", () => {
   });
 
   test("aborting after open preserves the caller's abort reason", async () => {
-    installFake(ws => ws.emit("open", {}));
+    const opened = Promise.withResolvers<void>();
+    installFake(ws => { ws.emit("open", {}); opened.resolve(); });
     const controller = new AbortController();
-    const response = await codexWsUpstreamFetch(
+    const pending = codexWsUpstreamFetch(
       CODEX_URL,
       { ...streamingInit(), signal: controller.signal },
       (() => { throw new Error("fallback must not run"); }) as unknown as typeof fetch,
     );
 
+    await opened.promise;
     controller.abort(new Error("turn cancelled"));
+    const response = await pending;
 
     await expect(response.text()).rejects.toThrow("turn cancelled");
     expect(FakeWebSocket.instances[0].closed).toBe(true);
+  });
+
+  test("a pre-dispatch observer receives every quota before the Response consumer attaches", async () => {
+    const observations: string[] = [];
+    installFake(ws => {
+      ws.emit("open", {});
+      const quota = (percent: number) => ws.emit("message", { data: JSON.stringify({
+        type: "codex.rate_limits", rate_limits: { primary: { used_percent: percent, window_minutes: 10080 } },
+      }) });
+      quota(10);
+      ws.emit("message", { data: JSON.stringify({ type: "response.created", response: { id: "r1" } }) });
+      quota(20);
+      ws.emit("message", { data: JSON.stringify({ type: "response.completed", response: { id: "r1" } }) });
+    });
+    const response = await rawCodexWsUpstreamFetch(CODEX_URL, streamingInit(), (() => {
+      throw new Error("fallback must not run");
+    }) as unknown as typeof fetch, BOUNDED_WS_RUNTIME, headers => observations.push(headers.get("x-codex-primary-used-percent")!));
+    expect(response.headers.get("x-codex-primary-used-percent")).toBe("10");
+    expect(observations).toEqual(["10", "20"]);
+    await response.text();
+  });
+
+  test("post-send prelude overflow settles as an errored body without HTTP fallback", async () => {
+    installFake(ws => {
+      ws.emit("open", {});
+      ws.emit("message", { data: JSON.stringify({ type: "codex.response.metadata", headers: { "x-models-etag": "x".repeat(CODEX_WS_METADATA_MAX_BYTES) } }) });
+    });
+    let resends = 0;
+    const response = await codexWsUpstreamFetch(CODEX_URL, streamingInit(), (async () => {
+      resends++;
+      return new Response("unexpected resend");
+    }) as typeof fetch);
+    expect(response.status).toBe(200);
+    expect(isCodexWsUpstreamResponse(response)).toBe(true);
+    await expect(response.text()).rejects.toThrow("metadata");
+    expect(resends).toBe(0);
+    expect(FakeWebSocket.instances[0].sent).toHaveLength(1);
+  });
+
+  test("the first-response deadline settles a sent request through the outer retry wrapper without resending", async () => {
+    const { fetchWithTransientRetry } = await import("../../src/lib/upstream-retry");
+    jest.useFakeTimers();
+    const opened = Promise.withResolvers<void>();
+    installFake(ws => { ws.emit("open", {}); opened.resolve(); });
+    let sends = 0;
+    let http = 0;
+    try {
+      const pending = fetchWithTransientRetry(() => {
+        sends++;
+        return codexWsUpstreamFetch(CODEX_URL, streamingInit(), (async () => {
+          http++;
+          return new Response("must not resend");
+        }) as typeof fetch);
+      }, {});
+      await opened.promise;
+      jest.advanceTimersByTime(CODEX_WS_RESPONSE_PRELUDE_TIMEOUT_MS);
+      const response = await pending;
+      expect(response.status).toBe(200);
+      await expect(response.text()).rejects.toThrow("prelude timed out");
+      expect(sends).toBe(1);
+      expect(http).toBe(0);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  test("malformed native WS metadata still normalizes the real HTTP fallback routing hint", async () => {
+    let fallbackInit: RequestInit | undefined;
+    const body = JSON.stringify({ model: "gpt-6-astra", service_tier: "priority", stream: true, client_metadata: [] });
+    const response = await codexWsUpstreamFetch(CODEX_URL, {
+      method: "POST", body, headers: { "x-codex-routing-hint": "model=stale;tier=flex" },
+    }, (async (_url: unknown, init?: RequestInit) => {
+      fallbackInit = init;
+      return new Response("http-fallback");
+    }) as typeof fetch);
+    expect(await response.text()).toBe("http-fallback");
+    expect(new Headers(fallbackInit?.headers).get("x-codex-routing-hint")).toBe("model=gpt-6-astra;tier=priority");
+    expect(fallbackInit?.body).toBe(body);
+    expect(FakeWebSocket.instances).toHaveLength(0);
+  });
+});
+
+describe("native WS metadata boundaries", () => {
+  test("tertiary and label-only metadata families share the native family budget", () => {
+    for (const suffix of ["tertiary-used-percent", "limit-name"]) {
+      const owner = new CodexWsMetadata();
+      owner.commit();
+      const headers = Object.fromEntries(Array.from({ length: 17 }, (_, i) => [`x-codex-family-${i}-${suffix}`, "1"]));
+      expect(() => owner.consume({ type: "codex.response.metadata", headers }, 2000)).toThrow("header budget");
+      expect([...owner.snapshot()]).toHaveLength(0);
+    }
+  });
+  test("new valid windows replace missing optional fields instead of inheriting old resets", () => {
+    const owner = new CodexWsMetadata();
+    owner.consume({ type: "codex.rate_limits", rate_limits: { primary: { used_percent: 8, window_minutes: 300, reset_at: 1900000000 } } }, 100);
+    owner.consume({ type: "codex.rate_limits", rate_limits: { primary: { used_percent: 9 } } }, 100);
+    expect(owner.snapshot().get("x-codex-primary-used-percent")).toBe("9");
+    expect(owner.snapshot().has("x-codex-primary-window-minutes")).toBe(false);
+    expect(owner.snapshot().has("x-codex-primary-reset-at")).toBe(false);
+  });
+
+  test("etag and extra-family events do not republish accumulated ordinary quota", () => {
+    const observed: string[] = [];
+    const owner = new CodexWsMetadata(headers => observed.push(headers.get("x-codex-primary-used-percent")!));
+    owner.commit();
+    owner.consume({ type: "codex.rate_limits", rate_limits: { primary: { used_percent: 10 } } }, 100);
+    owner.consume({ type: "codex.response.metadata", headers: { "x-models-etag": "new" } }, 100);
+    owner.consume({ type: "codex.rate_limits", metered_limit_name: "codex_bengalfox", rate_limits: { primary: { used_percent: 20 } } }, 100);
+    expect(observed).toEqual(["10"]);
+  });
+
+  test("metered families never overwrite the ordinary Codex quota", () => {
+    const owner = new CodexWsMetadata();
+    const ingest = (payload: Record<string, unknown>) => owner.consume(payload, Buffer.byteLength(JSON.stringify(payload)));
+    ingest({ type: "codex.rate_limits", rate_limits: { primary: { used_percent: 8, window_minutes: 10080 } } });
+    ingest({ type: "codex.rate_limits", metered_limit_name: "codex_bengalfox", limit_name: "codex", rate_limits: { primary: { used_percent: 17, window_minutes: 300 } } });
+    for (const metered_limit_name of ["invalid;codex", "gpt-reserve", 4, ""]) {
+      ingest({ type: "codex.rate_limits", metered_limit_name, rate_limits: { primary: { used_percent: 100 } } });
+    }
+    expect(owner.snapshot().get("x-codex-primary-used-percent")).toBe("8");
+    expect(owner.snapshot().get("x-codex-bengalfox-primary-used-percent")).toBe("17");
+    expect(owner.snapshot().has("x-gpt-reserve-primary-used-percent")).toBe(false);
+  });
+
+  test("invalid numeric values remain missing, explicit zero remains known", () => {
+    const owner = new CodexWsMetadata();
+    for (const used_percent of [null, "0", -1, Infinity, NaN]) {
+      owner.consume({ type: "codex.rate_limits", rate_limits: { primary: { used_percent } } }, 100);
+    }
+    expect(owner.snapshot().has("x-codex-primary-used-percent")).toBe(false);
+    owner.consume({ type: "codex.rate_limits", rate_limits: { primary: { used_percent: 0, reset_at: 0, window_minutes: 0 } } }, 100);
+    expect(owner.snapshot().get("x-codex-primary-used-percent")).toBe("0");
+    expect(owner.snapshot().get("x-codex-primary-reset-at")).toBe("0");
+  });
+
+  test("metadata value and cumulative prelude bounds cannot be bypassed by small frames", () => {
+    const owner = new CodexWsMetadata();
+    owner.consume({ type: "codex.response.metadata", headers: { "x-models-etag": "x".repeat(CODEX_WS_METADATA_MAX_VALUE_BYTES) } }, CODEX_WS_METADATA_MAX_VALUE_BYTES);
+    expect(() => owner.consume({ type: "codex.response.metadata", headers: { "x-models-etag": "x".repeat(CODEX_WS_METADATA_MAX_VALUE_BYTES + 1) } }, CODEX_WS_METADATA_MAX_VALUE_BYTES + 1)).toThrow("value");
+    const prelude = new CodexWsMetadata();
+    prelude.consume({ type: "codex.rate_limits" }, CODEX_WS_METADATA_MAX_BYTES);
+    expect(() => prelude.consume({ type: "codex.rate_limits" }, 1)).toThrow("prelude");
+  });
+
+  test("late observations detach on terminal and response metadata strips unknown authority", () => {
+    let calls = 0;
+    const owner = new CodexWsMetadata(() => { calls++; });
+    owner.commit();
+    const text = owner.consume({ type: "codex.response.metadata", headers: { "x-models-etag": "good", authorization: "secret", "set-cookie": "secret", "x-codex-turn-state": "bad\r\nvalue" } }, 100);
+    expect(text).toBe('{"type":"codex.response.metadata","headers":{"x-models-etag":"good"}}');
+    owner.finish();
+    const endedCalls = calls;
+    owner.consume({ type: "codex.rate_limits", rate_limits: { primary: { used_percent: 40 } } }, 100);
+    expect(calls).toBe(endedCalls);
+    expect(owner.snapshot().has("x-codex-primary-used-percent")).toBe(false);
+  });
+
+  test("metadata family and header-count caps reject only the overflowing addition", () => {
+    const families = new CodexWsMetadata();
+    families.commit();
+    for (let i = 0; i < 16; i++) {
+      families.consume({ type: "codex.rate_limits", metered_limit_name: `codex-family-${i}`, rate_limits: { primary: { used_percent: i } } }, 100);
+    }
+    expect(families.snapshot().get("x-codex-family-15-primary-used-percent")).toBe("15");
+    expect(() => families.consume({ type: "codex.rate_limits", metered_limit_name: "codex-family-16", rate_limits: { primary: { used_percent: 16 } } }, 100)).toThrow("header budget");
+    expect(families.snapshot().has("x-codex-family-16-primary-used-percent")).toBe(false);
+    const headers = new CodexWsMetadata();
+    headers.commit();
+    headers.consume({ type: "codex.response.metadata", headers: Object.fromEntries(Array.from({ length: 128 }, (_, i) => [`x-ratelimit-fixture-${i}`, "1"])) }, 4000);
+    expect([...headers.snapshot()]).toHaveLength(128);
+    expect(() => headers.consume({ type: "codex.response.metadata", headers: { "x-ratelimit-extra": "1" } }, 100)).toThrow("header budget");
+    expect([...headers.snapshot()]).toHaveLength(128);
   });
 });
 
@@ -937,6 +1251,8 @@ describe("oversized Codex create frames", () => {
   });
 
   test("dials the configured provider's own wss URL for an opt-in upstream", async () => {
+    process.env.HTTPS_PROXY = "http://proxy.example:8080";
+    process.env.NO_PROXY = "sub2api.example.com:443";
     installFake(ws => {
       ws.emit("open", {});
       ws.emit("message", { data: JSON.stringify({ type: "response.completed", response: { id: "r-ws" } }) });
@@ -949,6 +1265,7 @@ describe("oversized Codex create frames", () => {
     );
     expect(FakeWebSocket.instances).toHaveLength(1);
     expect(FakeWebSocket.instances[0]!.url).toBe("wss://sub2api.example.com/v1/responses");
+    expect(FakeWebSocket.instances[0]!.options?.proxy).toBeUndefined();
     expect(response.headers.get("content-type")).toContain("text/event-stream");
     expect(await response.text()).toContain("response.completed");
   });

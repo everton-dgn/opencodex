@@ -237,6 +237,12 @@ Run opencodex as a login-managed background service (macOS **launchd**, Linux **
 Windows **Task Scheduler**) that auto-starts on login and auto-restarts on crash. Service runs set
 `OCX_SERVICE=1` so a restart does not churn the Codex config.
 
+Windows Task Scheduler installs use normal process priority (`Priority=4`). The older background
+priority (`7`, also the scheduler default when omitted) can delay the proxy's health responses under
+CPU contention, making the tray report Offline even while the process is alive. After upgrading,
+run `ocx service repair` to migrate that registered priority and restart the service. This migration
+may request UAC approval; a priority already set to normal or high does not itself trigger replacement.
+
 The Windows wrapper verifies its baked Bun runtime and CLI entry before every start attempt. If an
 interrupted package update removed either file, it logs one `installation is incomplete` message and
 stops instead of retrying the same missing executable every five seconds. Reinstall opencodex, then
@@ -370,6 +376,9 @@ service startup is bypassed. It refuses the change and rolls back when the launc
 cannot be validated and cleaned up safely. Therefore `codex-shim install` is not unconditional. If
 it is refused, reinstall Codex so the PATH entry is a concrete executable or launcher and retry;
 use `ocx service install` instead when a dynamic command-manager launcher cannot meet these checks.
+Cleanup refusals include a bounded diagnostic suffix identifying the probe phase, a recognized
+native error code or signal, and the exit status when known. It does not include launcher paths
+or raw child output, and does not relax the validation or rollback checks.
 During upgrades, an installed Unix shim that lacks the current validation guard is regenerated and
 probed. If its saved launcher is unsafe, OpenCodex removes the obsolete shim and restores the
 original launcher instead of leaving the unsafe wrapper installed.

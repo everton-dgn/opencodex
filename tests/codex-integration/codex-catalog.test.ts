@@ -3107,6 +3107,17 @@ describe("Codex catalog routed normalization", () => {
     expect(rows.find(entry => entry.slug === "gpt-5.6-sol")?.display_name).toBe("My combo");
   });
 
+  test("pending re-registration cannot recover ON rows from a degraded old catalog", () => {
+    const old = { ...nativeTemplate(), slug: "vendor/model-0", owned_by: "vendor", opencodex_catalog_kind: CODEX_PROVIDER_MODEL_CATALOG_KIND };
+    const input = {
+      catalogModels: [old], routedEntries: [],
+      gatheredProviderNames: new Set(["vendor"]), degradedProviderNames: new Set(["vendor"]),
+    };
+    expect(mergeObservedForTest(input).some(entry => entry.slug === "vendor/model-0")).toBe(true);
+    expect(mergeObservedForTest({ ...input, pendingProviderNames: new Set(["vendor"]) })
+      .some(entry => entry.slug === "vendor/model-0")).toBe(false);
+  });
+
   test("does not reuse a routed native alias as the native catalog template", () => {
     const routedAlias = {
       ...nativeTemplate(),
@@ -5509,11 +5520,11 @@ describe("Codex catalog routed normalization", () => {
     const expected = [
       { slug: "deepseek/deepseek-v4-flash", efforts: ["low", "high", "max", "ultra"] },
       { slug: "deepseek/deepseek-v4-pro", efforts: ["low", "high", "max", "ultra"] },
-      { slug: "opencode-go/deepseek-v4-flash", efforts: ["low", "high", "max", "ultra"] },
-      { slug: "opencode-go/deepseek-v4-pro", efforts: ["low", "high", "max", "ultra"] },
-      { slug: "opencode-go/glm-5.2", efforts: ["low", "medium", "high", "xhigh", "max", "ultra"] },
-      { slug: "opencode-go/glm-5.1", efforts: ["low", "medium", "high", "xhigh", "max", "ultra"] },
-      { slug: "opencode-go/glm-5", efforts: ["low", "medium", "high", "xhigh", "max", "ultra"] },
+      { slug: "opencode-go/deepseek-v4-flash", efforts: ["low", "high", "max"] },
+      { slug: "opencode-go/deepseek-v4-pro", efforts: ["low", "high", "max"] },
+      { slug: "opencode-go/glm-5.2", efforts: ["low", "medium", "high", "xhigh", "max"] },
+      { slug: "opencode-go/glm-5.1", efforts: ["low", "medium", "high", "xhigh", "max"] },
+      { slug: "opencode-go/glm-5", efforts: ["low", "medium", "high", "xhigh", "max"] },
       { slug: "zai/glm-5.2", efforts: ["low", "medium", "high", "xhigh", "max", "ultra"] },
       { slug: "zai/glm-5.2[1m]", efforts: ["low", "medium", "high", "xhigh", "max", "ultra"] },
       { slug: "zhipu-bigmodel/glm-4.6", efforts: ["low", "medium", "high", "xhigh", "max", "ultra"] },

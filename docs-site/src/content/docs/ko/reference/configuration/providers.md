@@ -5,6 +5,21 @@ description: 공급자 항목, 인증, 엔드포인트, 모델 카탈로그, 할
 
 공급자는 opencodex에 모델의 위치, 사용하는 와이어 어댑터, 요청 인증 방식을 알려줍니다.
 
+## 처음 등록할 때의 모델 선택
+
+신규 비-OAuth 연결은 신뢰할 수 있는 모델 목록을 확보할 때까지 모델 노출을 보류합니다. Models 탭의 중복 없는 모델 행이 20개 이상이면 모델 스위치를 모두 OFF로 설정합니다. 프로바이더는 활성 상태를 유지합니다. 실제 인증 방식이 OAuth나 ChatGPT 로그인인 연결은 기존 기본값을 유지합니다.
+
+처음 등록할 때만 적용하며 업데이트, 재로그인, 키 교체로 기존 선택을 초기화하지 않습니다. 초기 설정이 끝나면 Models 탭이나 아래 CLI 명령으로 필요한 모델을 켤 수 있습니다. 이후 새 모델이 추가될 때의 정책은 별도입니다. `<model-id>`는 목록에 나온 ID로 바꾸세요.
+
+```sh
+ocx models live --provider openrouter
+ocx models enable '<model-id>'
+ocx models disable '<model-id>'
+ocx models provider openrouter on
+```
+
+GUI에서 등록이나 OAuth 로그인을 마치면 Models 페이지로 이동하는 안내 팝업이 뜹니다. CLI는 모델 관리 명령을 출력하며 JSON 응답에도 다음 단계가 포함됩니다. `--no-wait`는 로그인 완료가 아닌 대기 상태를 표시합니다. 실시간 모델 명령을 쓰기 전에 `ocx start`로 프록시를 시작하세요.
+
 ## 공급자 관련 최상위 필드
 
 | 필드 | 타입 | 기본값 | 의미 |
@@ -12,8 +27,9 @@ description: 공급자 항목, 인증, 엔드포인트, 모델 카탈로그, 할
 | `providers` | `Record<string, OcxProviderConfig>` | — | 공급자 이름을 공급자 설정에 매핑합니다. |
 | `openaiProviderTierVersion?` | `2` | 마이그레이션으로 설정됨 | 옵션을 인식하는 단일 OpenAI 투영이 완료되었음을 표시합니다. |
 | `disabledModels?` | `string[]` | — | Codex catalog와 `/v1/models`에서는 숨기지만 직접 proxy 호출은 차단하지 않습니다. routed id는 목록에서 제거됩니다. account-qualified native id는 해당 selector row만 숨기고, bare native GPT id는 bare row와 그 model의 모든 account-selector row를 숨깁니다. Models 페이지에는 bare native 행과 routed 행만 표시됩니다. selector-qualified 행 하나만 숨기려면 이 설정 필드에 직접 추가하세요. |
-| `providerContextCaps?` | `Record<string, number>` | `{}` | 공급자별 Codex 표시 컨텍스트 상한입니다. 상한은 이미 알려진 컨텍스트 윈도만 낮춥니다. |
-| `contextCapValue?` | `number` | `350000` | 대시보드의 컨텍스트 상한 컨트롤이 사용하는 기본값입니다. "모든 라우팅된 공급자에 적용" 토글이 켜져 있을 때만 값을 변경하면 기존 `providerContextCaps` 항목이 없는 공급자를 포함해 모든 라우팅된 공급자에 값이 적용됩니다. 그렇지 않으면 각 공급자는 자체 상한을 유지합니다. |
+| `providerContextCaps?` | `Record<string, number>` | `{}` | 공급자별 활성 컨텍스트 상한입니다. 일반 윈도는 줄어들며, 장문 윈도를 지원하는 네이티브 모델은 해당 모델의 지원 상한까지만 확장할 수 있습니다. |
+| `providerContextCapValues?` | `Record<string, number>` | `{}` | 공급자별로 마지막에 선택한 상한입니다. 꺼도 선택값이 남으며, 저장된 값만으로는 상한이 활성화되지 않습니다. 활성 값이 저장된 선택값보다 우선합니다. |
+| `contextCapValue?` | `number` | `350000` | 처음 켤 때 쓰는 기본값입니다. 다시 켜면 공급자별 선택값을 복원합니다. `setAll: true`와 함께 전역 값을 바꾸면 활성 상한만 갱신합니다. 값 없이 `setAll: true`를 보내면 설정된 모든 공급자의 상한을 현재 전역 값으로 켭니다. |
 | `codexAccounts?` | `CodexAccount[]` | `[]` | Codex Auth가 관리하는 ChatGPT/Codex 풀 계정 메타데이터입니다. 비밀 정보는 `codex-accounts.json`에 따로 저장됩니다. |
 | `pausedCodexAccountIds?` | `string[]` | `[]` | 일시 중지된 `__main__` 계정을 포함해, 재개될 때까지 Pool 선택에서 제외되는 계정입니다. |
 | `codexAccountNamespaces?` | `Record<string, string>` | — | 임의의 공개 model selector를 저장된 Codex 계정 target에 연결하는 선택적 map입니다. 계정 한정 선택기 행이 활성화되어 있으면 target이 존재하는 각 selector는 Codex picker에 별도의 `<selector>/<native-openai-model>` row를 추가하며, 각 row는 해당 계정만 사용합니다. selector가 하나라도 활성화되면 bare native row는 picker에서 숨겨지지만, 명시적으로 비활성화하지 않는 한 해당 id는 계속 routing 가능하고 raw `/v1/models`에 표시됩니다. |

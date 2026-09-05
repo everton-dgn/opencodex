@@ -5,6 +5,21 @@ description: 供應商項目、認證、端點、模型目錄、配額、context
 
 供應商告訴 opencodex 模型在哪裡、它使用哪種 wire adapter，以及請求如何被認證。
 
+## 首次註冊時的模型選擇
+
+新的非 OAuth 連線會先等待可靠的模型清單，再公開模型。如果 Models 分頁中去重後的模型列達到20個，所有模型開關初始為 OFF，但供應商本身保持 ACTIVE。實際驗證方式為 OAuth 或 ChatGPT 登入的連線保留預設值。
+
+只在首次註冊供應商時套用；更新、重新登入與更換金鑰不會重設既有選擇。初始化後，可在 Models 或使用以下 CLI 指令啟用所需模型。後續新增模型的獨立政策不變。請將 `<model-id>` 換成清單中的 ID。
+
+```sh
+ocx models live --provider openrouter
+ocx models enable '<model-id>'
+ocx models disable '<model-id>'
+ocx models provider openrouter on
+```
+
+在介面中完成註冊或 OAuth 登入後，提示視窗可開啟 Models 頁面。CLI 會輸出模型管理指令，JSON 也包含後續步驟。`--no-wait` 表示登入仍在等待中，並非已完成。使用即時模型指令前，請先執行 `ocx start` 啟動代理。
+
 ## 供應商相關的頂層欄位
 
 | 欄位 | 型別 | 預設值 | 意義 |
@@ -12,8 +27,9 @@ description: 供應商項目、認證、端點、模型目錄、配額、context
 | `providers` | `Record<string, OcxProviderConfig>` | — | 供應商名稱到供應商設定的映射。 |
 | `openaiProviderTierVersion?` | `2` | 由遷移設定 | 標記單一選項感知的 OpenAI projection 已完成。 |
 | `disabledModels?` | `string[]` | — | 對 Codex 目錄與 `/v1/models` 隱藏的模型，但不阻擋直接代理呼叫。路由 id 從清單中移除；裸原生 GPT id 取得 `visibility: "hide"`。 |
-| `providerContextCaps?` | `Record<string, number>` | `{}` | Per-供應商的 Codex 可見 context 上限。上限只會降低已知的 context window。 |
-| `contextCapValue?` | `number` | `350000` | 儀表板 context-cap 控制使用的值；變更它會更新每個啟用的 `providerContextCaps` 項目。 |
+| `providerContextCaps?` | `Record<string, number>` | `{}` | 各供應商目前生效的上下文上限。一般視窗只能縮小；支援長視窗的原生模型可以擴展到該模型支援的上限。 |
+| `providerContextCapValues?` | `Record<string, number>` | `{}` | 各供應商最後選擇的上限，停用後仍保留。僅儲存這些值不會啟用上限。生效中的值優先於儲存的選擇值。 |
+| `contextCapValue?` | `number` | `350000` | 首次啟用時使用的預設值。再次啟用時恢復該供應商的選擇值。修改全域值時附帶 `setAll: true` 只會更新已啟用的上限；不帶值的 `setAll: true` 會以目前全域值啟用所有已設定供應商的上限。 |
 | `codexAccounts?` | `CodexAccount[]` | `[]` | 由 Codex Auth 管理的 ChatGPT/Codex 池帳號中繼資料。秘密分別存在 `codex-accounts.json`。 |
 | `pausedCodexAccountIds?` | `string[]` | `[]` | 被排除於池選擇直到恢復的帳號，包含暫停時的 main `__main__` 帳號。 |
 | `codexAccountNamespaces?` | `Record<string, string>` | — | 公開模型選擇器命名空間到已儲存 Codex 帳號目標。這會驗證並持久化映射，但不會自行新增 picker 列或變更路由。 |

@@ -1,7 +1,8 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   clearAccountQuota,
   flushQuotaObservationsForTests,
@@ -27,27 +28,30 @@ const HOUR = 60 * 60_000;
 
 let captured: QuotaResetEvent[] = [];
 
-/** Let the seams' lazy import() chains settle. */
+/** Join the writer's ordered observation/forget chain, including cold imports. */
 async function settle(): Promise<void> {
-  for (let index = 0; index < 6; index += 1) await Promise.resolve();
-  await new Promise(resolve => setTimeout(resolve, 5));
+  await flushQuotaObservationsForTests();
 }
 
-beforeEach(() => {
+beforeEach(async () => {
+  await settle();
   captured = [];
   resetQuotaResetStoreForTests();
   resetQuotaResetNotifyCacheForTests();
   resetQuotaResetPollerForTests();
   clearAccountQuota();
+  await settle();
   setQuotaResetSink(event => {
     captured.push(event);
   });
 });
 
-afterEach(() => {
+afterEach(async () => {
+  await settle();
   setQuotaResetSink(null);
   resetQuotaResetPollerForTests();
   clearAccountQuota();
+  await settle();
 });
 
 describe("codex quota seam", () => {
@@ -92,6 +96,25 @@ describe("codex quota seam", () => {
     setAccountQuotaFromParsed(ACCOUNT, { resetCredits: 3 });
     await settle();
     expect(captured).toEqual([]);
+  });
+
+  test("credits-only refresh does not make later natural rolling decay look like a reset", async () => {
+    const start = Date.now();
+    let now = start;
+    const clock = spyOn(Date, "now").mockImplementation(() => now);
+    try {
+      setAccountQuotaFromParsed(ACCOUNT, { shortPercent: 96, shortResetAt: start + 5 * HOUR, shortWindowSeconds: 18_000 });
+      await flushQuotaObservationsForTests();
+      expect(captured).toEqual([]);
+      now = start + 59 * 60_000;
+      setAccountQuotaFromParsed(ACCOUNT, { resetCredits: 3 });
+      await flushQuotaObservationsForTests();
+      expect(captured).toEqual([]);
+      now = start + HOUR;
+      setAccountQuotaFromParsed(ACCOUNT, { shortPercent: 4, shortResetAt: start + 6 * HOUR, shortWindowSeconds: 18_000 });
+      await flushQuotaObservationsForTests();
+      expect(captured).toEqual([]);
+    } finally { clock.mockRestore(); }
   });
 
   test("a cleared row followed by a fresh low percent fires nothing", async () => {
@@ -269,18 +292,20 @@ describe("observation ordering under a burst", () => {
     // a cached import resolves in call order. Only a cold module registry reproduces it. Driven
     // red before the fix: 3/3 child runs reported a false surprise (82->58, 26->10, 42->22);
     // after the fix, 3/3 report none.
-    const child = new URL("../helpers/quota-reset-burst-child.ts", import.meta.url).pathname;
-    const proc = Bun.spawn(["bun", child], {
+    const child = fileURLToPath(new URL("../helpers/quota-reset-burst-child.ts", import.meta.url));
+    const proc = Bun.spawn([process.execPath, child], {
       // A private OPENCODEX_HOME: the baseline is persisted, so a shared home would let one
       // run seed the next and turn this into a test of leftover state.
       env: { ...process.env, OPENCODEX_HOME: mkdtempSync(join(tmpdir(), "ocx-burst-")) },
       stdout: "pipe",
       stderr: "pipe",
     });
-    const out = await new Response(proc.stdout).text();
-    await proc.exited;
-
-    expect(proc.exitCode).toBe(0);
+    const [exitCode, out, stderr] = await Promise.all([
+      proc.exited,
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+    ]);
+    expect(exitCode, `cold burst probe failed: ${stderr}\nstdout: ${out}`).toBe(0);
     expect(JSON.parse(out.trim())).toEqual([]);
   });
 

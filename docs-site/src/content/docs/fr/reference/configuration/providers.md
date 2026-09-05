@@ -6,6 +6,21 @@ description: Entrées du fournisseur, authentification, points de terminaison, c
 Un fournisseur indique à opencodex où se trouve un modèle, quel adaptateur de protocole il utilise et comment les requêtes sont
 authentifiées.
 
+## Sélection des modèles à l’inscription
+
+Une nouvelle connexion sans OAuth attend une liste de modèles fiable avant de les exposer. Si l’onglet Models contient au moins 20 lignes distinctes, tous les interrupteurs de modèles sont initialement OFF ; le fournisseur reste ACTIVE. Les connexions utilisant effectivement OAuth ou la connexion ChatGPT conservent leurs valeurs par défaut.
+
+Cette règle ne s’applique qu’à l’inscription d’un nouveau fournisseur. Les mises à jour, reconnexions et remplacements de clé préservent les choix existants. Après l’initialisation, activez les modèles souhaités dans Models ou avec les commandes ci-dessous. La politique distincte concernant les nouveaux modèles reste inchangée. Remplacez `<model-id>` par un ID de la liste.
+
+```sh
+ocx models live --provider openrouter
+ocx models enable '<model-id>'
+ocx models disable '<model-id>'
+ocx models provider openrouter on
+```
+
+Après une inscription ou une connexion OAuth dans l’interface, une boîte de dialogue permet d’ouvrir Models. La CLI affiche les commandes de gestion des modèles, aussi présentes dans les étapes suivantes du JSON. `--no-wait` indique une connexion en attente, pas terminée. Lancez le proxy avec `ocx start` avant les commandes de modèles en direct.
+
 ## Champs de premier niveau liés aux fournisseurs
 
 | Champ | Type | Par défaut | Signification |
@@ -13,8 +28,9 @@ authentifiées.
 | `providers` | `Record<string, OcxProviderConfig>` | — | Mappage du nom du fournisseur avec la configuration du fournisseur. |
 | `openaiProviderTierVersion?` | `2` | défini par la migration | Marque la projection OpenAI prenant en compte les options uniques comme terminée. |
 | `disabledModels?` | `string[]` | — | Modèles masqués du catalogue de Codex et de `/v1/models`, mais non bloqués des appels proxy directs. Un identifiant acheminé est supprimé des listes. Un identifiant natif qualifié de compte masque uniquement cette ligne de sélecteur ; un identifiant GPT natif nu masque la ligne nue et chaque ligne de sélecteur de compte pour ce modèle. La page Modèles du tableau de bord expose uniquement les lignes natives routées et nues ; utilisez ce champ de configuration directement pour masquer une ligne qualifiée par le sélecteur. |
-| `providerContextCaps?` | `Record<string, number>` | `{}` | Limites de contexte Codex-visibles par fournisseur. Un plafond abaisse uniquement une fenêtre de contexte connue. |
-| `contextCapValue?` | `number` | `350000` | Valeur par défaut utilisée par les contrôles de plafond de contexte du tableau de bord. La modifier applique la valeur à chaque fournisseur routé — y compris ceux qui ne possèdent aucune entrée `providerContextCaps` — uniquement lorsque l'option « appliquer à chaque fournisseur routé » est activée ; sinon, chaque fournisseur conserve son propre plafond. |
+| `providerContextCaps?` | `Record<string, number>` | `{}` | Limites de contexte actives par fournisseur. Les fenêtres ordinaires sont réduites ; les modèles natifs prenant en charge une fenêtre longue peuvent être étendus uniquement jusqu’à leur propre plafond pris en charge. |
+| `providerContextCapValues?` | `Record<string, number>` | `{}` | Dernières limites sélectionnées par fournisseur, conservées après désactivation. Ces valeurs n’activent aucun plafond. Une valeur active est prioritaire sur une valeur mémorisée. |
+| `contextCapValue?` | `number` | `350000` | Valeur par défaut lors de la première activation. Les activations suivantes restaurent la sélection du fournisseur. Modifier la valeur globale avec `setAll: true` ne modifie que les plafonds actifs ; `setAll: true` sans valeur active tous les fournisseurs configurés à la valeur globale actuelle. |
 | `codexAccounts?` | `CodexAccount[]` | `[]` | Métadonnées du compte pool ChatGPT/Codex gérées par Codex Auth. Les secrets vivent séparément dans `codex-accounts.json`. |
 | `pausedCodexAccountIds?` | `string[]` | `[]` | Comptes exclus de la sélection du pool jusqu'à la reprise, y compris le compte principal `__main__` lorsqu'il est mis en pause. |
 | `codexAccountNamespaces?` | `Record<string, string>` | — | Mappage facultatif d’un sélecteur de modèle public arbitraire vers une cible de compte Codex stockée. Lorsque les lignes du sélecteur qualifié par compte sont activées, chaque sélecteur dont la cible est présente ajoute des lignes `<selector>/<native-openai-model>` distinctes au sélecteur Codex ; chaque ligne utilise uniquement ce compte. Dès qu'un sélecteur est actif, les lignes natives non qualifiées sont masquées dans le sélecteur, mais leurs identifiants restent routables et figurent toujours dans la réponse brute de `/v1/models`, sauf désactivation explicite. |

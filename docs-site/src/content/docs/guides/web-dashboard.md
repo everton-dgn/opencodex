@@ -89,6 +89,26 @@ host and port over a LAN IP or an alias.
 | **Storage** | Read-only CODEX_HOME disk breakdown (sessions, archives, DBs, attachments). Optional archived cleanup: preview the oldest N%, then quarantine to `CODEX_HOME/.trash` (default) or permanently delete behind an explicit checkbox. **Auto-cleanup policy** is opt-in and **default OFF** (`storageCleanupPolicy.enabled`); configure threshold/target/schedule/mode on the Storage page, or trigger **Run now**. Quarantined entries can be restored from the Storage page (JSONL + threads). Active sessions stay read-only. Cleanup and restore are refused while Codex holds the newest/active `state_*.sqlite` locked. |
 | **Stop** | Gracefully stop the proxy and installed background service, restore native Codex, and exit (`POST /api/stop`). On Windows with the Task Scheduler backend the dashboard refuses and asks you to run `ocx stop` instead: that wrapper can respawn the proxy after the task ends, and only a stop running outside this process can verify the restart window before restoring your client config. Nothing is changed when it refuses. |
 
+### Filtering request logs
+
+Logs filters combine surface, intercepted requests, provider, exact model, status, time,
+speed, and conversation ID over the currently loaded request ring. Provider and model
+choices also include fallback attempts; model matching ignores case and surrounding spaces
+but does not match partial names. Choices that disappear from the ring reset to All.
+
+Time windows cover the last 15 minutes, hour, or day and refresh every 30 seconds while the
+Logs tab is active, even with auto-refresh off. Windows use the proxy timestamp from
+the logs response and advance with elapsed browser time, so a different browser clock
+does not shift the cutoff. Older proxies without that timestamp retain the browser-clock
+fallback until a valid sample is available. Speed uses output tokens per second over the
+full request duration: below 15, 15 to below 50, or at least 50. Unavailable speed values are
+excluded when a speed filter is active. Success means 2xx; errors mean 4xx or 5xx.
+
+Active filters show the matching count out of the loaded total. Reset filters restores all
+rows and returns keyboard focus to the All surface control; “No matching requests”
+differs from an empty log ring. Use arrow keys or Home/End in
+the surface selector. These controls do not query historical records beyond the loaded ring.
+
 ### Linking to a section
 
 There is a single layout, so there is no layout switch to configure. Dashboard sections are
@@ -100,6 +120,22 @@ bookmark now lands on `#providers`.
 Cost values in **Logs** and **Usage** are API list-price equivalents calculated from reported tokens.
 They are not billing receipts or evidence of an actual charge; subscription usage or provider credits
 may apply instead.
+
+Provider model rows may include **unresolved requested model usage**: the saved route sent the
+requested name unchanged to the default provider. These tokens belong to that serving provider,
+not necessarily the vendor named in the request. The dashboard preserves the original name and
+usage rather than guessing which model ran. For slash-containing unresolved names, a different
+vendor's model price alone is not enough to estimate cost; an exact provider or configured price
+still applies. Model shares are calculated within the selected provider. Requests for an unknown
+reserved `policy/` name now fail before reaching an upstream provider; historical usage is retained.
+
+The selected provider's **Overview** and **Usage** tabs show **Current account usage** below the
+usage statistics. **Accounts** and **API keys** show each supported credential's own quota,
+including credit balances. The provider-wide overview still shows pooled capacity where available;
+it is not substituted for a missing current-account reading. Unsupported lookup, no passive
+observation yet, loading, failed lookup with last-known values, and measured zero are separate
+states. **Quota check completed** means the read settled—not that a passive observation became
+new or that every upstream measurement was refreshed.
 
 ## Model visibility
 
@@ -248,12 +284,13 @@ The GUI is a thin client over the proxy's JSON management API. Useful endpoints 
 | `GET /api/models` · `PUT /api/disabled-models` | List native/routed model rows and update the shared disabled-model set. |
 | `GET /api/selected-models` · `PUT /api/model-visibility` | Read provider allowlists and atomically change the final visibility of one model or provider group. |
 | `GET /api/key-providers` · `GET /api/oauth/providers` | Read the API-key and OAuth provider catalogs. |
+| `GET /api/oauth/accounts?provider=...&quota=1` · `GET /api/providers/keys?name=...&quota=1` | Read each account or key's quota where supported, without changing the active credential. Add `refresh=1` to bypass settled quota cache; an in-flight same-credential read can be shared. Omit `quota=1` for a cheap local list with each row's `quotaMode`: `probe`, `passive`, or `unsupported`. Passive reads return existing observations without a network probe. No reading is not the same as 0% used, and quotas for multiple keys are not summed. |
 | `POST /api/oauth/login` · `GET /api/oauth/status` | Start a provider OAuth flow and poll for completion. |
 | `GET /api/codex-auth/accounts?refresh=1` | List main and pool accounts, force quota refresh, and report main-account `hasCredential` / terminal `needsReauth` state. |
 | `PUT /api/codex-auth/active` · `PUT /api/codex-auth/auto-switch` · `PUT /api/codex-auth/failover` | Select the account for the next request and configure pool routing. |
 | `GET /api/codex-auth/active` · `PUT /api/codex-auth/accounts/priority` | Read the effective account (including `pinned` and which account is `pinnedAccountId`) and set one account's selection order. |
 | `POST /api/codex-auth/login` · `GET /api/codex-auth/login-status` | Add a pool account through browser login. |
-| `GET /api/logs?tail=50&limit=20&offset=0&provider=...&status=5xx` | Read recent request metadata with optional tail, provider, and exact/class status filters. With `limit`/`offset`, paging walks backward from the newest row (`offset=0` returns the latest page). Response shape: `{ timeZone, total, logs }` where `total` is the filtered row count before pagination. |
+| `GET /api/logs?tail=50&limit=20&offset=0&provider=...&status=5xx` | Read recent request metadata with optional tail, provider, and exact/class status filters. With `limit`/`offset`, paging walks backward from the newest row (`offset=0` returns the latest page). Response shape: `{ timeZone, generatedAt, total, logs }` where `total` is the filtered row count before pagination. |
 | `GET` / `PUT /api/subagent-models` | Read or set the five featured `spawn_agent` override models. |
 | `POST /api/stop` | Stop the proxy/service, restore native Codex, and exit. Refused with `respawnable_service` on the Windows Task Scheduler backend, and with `service_state_unknown` when that state cannot be read; nothing is changed either way. |
 

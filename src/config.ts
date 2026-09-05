@@ -525,6 +525,12 @@ const providerConfigSchema = z.object({
   modelAliases: z.record(z.string(), z.string()).optional(),
   modelDisplayNames: modelDisplayNamesSchema.optional(),
   defaultAliases: z.boolean().optional(),
+  initialModelSelection: z.object({
+    version: z.literal(1),
+    registrationId: z.uuid(),
+    status: z.enum(["pending", "ready", "all-off"]),
+    modelCount: z.number().int().nonnegative().optional(),
+  }).optional().catch(undefined),
   requestPacing: requestPacingSchema.optional().catch(undefined),
   mcpMaxTools: z.number().int().positive().optional(),
   mcpMaxSchemaBytes: z.number().int().positive().optional(),
@@ -577,6 +583,7 @@ const providerConfigSchema = z.object({
   }).strict().optional(),
   responsesSnapshotRepair: z.boolean().optional(),
   xaiResponsesXSearch: z.boolean().optional(),
+  xaiResponsesDefaultVersion: z.number().int().positive().optional().catch(undefined),
 }).passthrough();
 
 export { isValidProviderName, hasOwnProvider } from "./config/provider-name";
@@ -1107,12 +1114,12 @@ const configSchema = z.object({
   defaultModelAliases: z.boolean().optional(),
   // Malformed hand edits disable this opt-in projection without rejecting providers.
   cursorEffortRows: z.boolean().optional().catch(false),
-  // Same opt-in discipline: a malformed hand edit degrades to off rather than rejecting
-  // every provider.
-  fastRows: z.boolean().optional().catch(false),
+  // Fast selectors default on; malformed hand edits disable them without rejecting providers.
+  fastRows: z.boolean().default(true).catch(false),
   // Ultra Fast is opt-in for the same reason and degrades the same way: a malformed hand
   // edit turns the tier off rather than rejecting the config that carries it.
   ultraFastTier: z.boolean().optional().catch(false),
+  codexMainAccountHardLock: z.boolean().optional().catch(false),
   // Future versions remain opaque through passthrough-compatible whole-config saves.
   // Only version 1 grants deletion authority in the rebase path.
   configRebaseProvenance: z.unknown().optional(),
@@ -1128,6 +1135,7 @@ const configSchema = z.object({
   subagentModels: z.array(z.string().min(1)).optional().catch(undefined),
   clientIntegrations: clientIntegrationsSchema.optional().catch(undefined),
   providerContextCaps: z.record(z.string(), z.number().int().positive()).optional(),
+  providerContextCapValues: z.record(z.string(), z.number().int().positive()).optional(),
   contextCapValue: z.number().int().positive().optional(),
   multiAgentGuidanceEnabled: z.boolean().optional(),
   // Invalid optional recovery config must not discard unrelated provider/account state.
@@ -3677,6 +3685,7 @@ export function getDefaultConfig(): OcxConfig {
   return {
     port: 10100,
     emptyCompletionRetry: false,
+    fastRows: true,
     managementUsageMaxReadBytes: 64 * 1024 * 1024,
     appOwnedMemoryBudgetMb: DEFAULT_APP_OWNED_MEMORY_BUDGET_BYTES / (1024 * 1024),
     // Fresh/re-initialized configs are already written in the current three-tier
@@ -3730,11 +3739,12 @@ function warnProxyConfigDiscardOnce(kind: "proxy" | "noProxy" | "noProxyElements
 }
 
 /**
- * Mirror `config.proxy` into HTTP(S)_PROXY env vars so Bun's native fetch routes every outbound
- * provider call through the proxy — no per-callsite changes (verified: Bun honors these plus
- * NO_PROXY). User-set env vars always win; localhost/127.0.0.1 are appended to NO_PROXY so the
- * CLI's own health checks and running-proxy API calls stay direct. Call once per process entry
- * that makes outbound provider requests (server start, catalog sync).
+ * Mirror `config.proxy` into HTTP(S)_PROXY env vars. Bun fetch consumes them natively; transports
+ * such as the ChatGPT upstream WebSocket select the same environment explicitly. User-set HTTP(S)_PROXY
+ * variables win; config fills missing scheme proxies, which take precedence over ALL_PROXY for WS.
+ * localhost/127.0.0.1 are appended to NO_PROXY so the CLI's own health checks and
+ * running-proxy API calls stay direct. Call once per process entry that makes outbound provider
+ * requests (server start, catalog sync).
  */
 export function applyProxyEnv(config: OcxConfig): void {
   applyProxyEnvWith(config);
