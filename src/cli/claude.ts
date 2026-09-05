@@ -12,6 +12,7 @@ import { loadConfig } from "../config";
 import { injectClaudeAgentDefs } from "../claude/agents-inject";
 import { CLAUDE_ALIAS_PREFIX_V1, CLAUDE_ALIAS_PREFIX_V2 } from "../claude/alias";
 import { effectiveModelEnv, resolveAutoContext } from "../claude/context-windows";
+import { isDesktopDateAlias } from "../claude/desktop-profile";
 import { claudeConfigDir, refreshGatewayModelCacheFromProxy } from "../claude/gateway-cache";
 import { commandInvocation } from "../lib/win-exec";
 import { isProxyAdmissionSecret } from "../server/auth-cors";
@@ -482,7 +483,7 @@ const DESKTOP_3P_ALIAS = /^claude-opus-4(?:-8)?-[a-z][0-9a-z]{2}$/;
 export function isProxyOnlyModelId(value: string, providerNames: readonly string[] = []): boolean {
   const id = value.trim().replace(/\[1m\]$/, "");
   if (!id) return false;
-  if (id.startsWith(CLAUDE_ALIAS_PREFIX_V1) || id.startsWith(CLAUDE_ALIAS_PREFIX_V2) || DESKTOP_3P_ALIAS.test(id)) {
+  if (id.startsWith(CLAUDE_ALIAS_PREFIX_V1) || id.startsWith(CLAUDE_ALIAS_PREFIX_V2) || DESKTOP_3P_ALIAS.test(id) || isDesktopDateAlias(id)) {
     return true;
   }
   const slash = id.indexOf("/");

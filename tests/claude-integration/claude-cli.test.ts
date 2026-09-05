@@ -12,6 +12,7 @@ import {
   shouldAllowRootSkipPermissions,
 } from "../../src/cli/claude";
 import { commandInvocation } from "../../src/lib/win-exec";
+import { reconcileDesktopProfile } from "../../src/claude/desktop-profile";
 import type { LivenessIo, LiveProxy } from "../../src/server/proxy-liveness";
 import type { OcxConfig } from "../../src/types";
 
@@ -133,6 +134,40 @@ describe("ocx claude native fallback", () => {
     expect(nativeModelOverride("claude-ocx2-abcd", "mock/model", [], ["mock"]).flag).toBeUndefined();
     expect(nativeModelOverride("claude-ocx2-abcd", "opus", ["--model", "sonnet"], ["mock"]))
       .toEqual({});
+  });
+
+  test("clears generated Desktop date aliases and overrides them with a native model", () => {
+    const profile = reconcileDesktopProfile(undefined, [{ route: "mock/model", label: "Mock" }]);
+    const alias = profile.assignments["mock/model"]!.alias;
+
+    for (const model of [alias, `${alias}[1m]`]) {
+      expect(isProxyOnlyModelId(model)).toBe(true);
+      expect(buildNativeClaudeEnv(cfg(), {
+        ANTHROPIC_MODEL: model,
+        ANTHROPIC_DEFAULT_OPUS_MODEL: model,
+      })).toEqual({});
+      expect(nativeModelOverride(model, "opus", []))
+        .toMatchObject({ flag: ["--model", "opus"] });
+      expect(nativeModelOverride(model, model, []).flag).toBeUndefined();
+      expect(nativeModelOverride(model, "opus", ["--model", "sonnet"]))
+        .toEqual({});
+    }
+  });
+
+  test("keeps legacy Desktop aliases and limits date recognition to valid profile slots", () => {
+    for (const model of ["claude-opus-4-a1b", "claude-opus-4-8-a1b"]) {
+      expect(isProxyOnlyModelId(model)).toBe(true);
+    }
+    for (const model of [
+      "claude-opus-4-8-20260229",
+      "claude-opus-4-8-20261301",
+      "claude-opus-4-8-20270101",
+      "claude-sonnet-4-20250514",
+    ]) {
+      expect(isProxyOnlyModelId(model)).toBe(false);
+      expect(buildNativeClaudeEnv(cfg(), { ANTHROPIC_MODEL: model }).ANTHROPIC_MODEL).toBe(model);
+      expect(nativeModelOverride(model, "opus", [])).toEqual({});
+    }
   });
 
   test("preserves the root opt-in on native fallback", () => {

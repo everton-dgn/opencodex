@@ -83,7 +83,7 @@ function isRealAnthropicRoute(route: string): boolean {
   return route.startsWith("anthropic/claude-");
 }
 
-function validDateAlias(alias: string): boolean {
+export function isDesktopDateAlias(alias: string): boolean {
   const match = DATE_ALIAS.exec(alias);
   if (!match) return false;
   const year = Number(match[1]!.slice(0, 4));
@@ -120,7 +120,7 @@ export function parseDesktopProfile(value: unknown): DesktopProfile {
     if (typeof raw.alias !== "string" || !raw.alias) throw new DesktopProfileError("must be a non-empty string", `profile.assignments.${route}.alias`);
     if (isRealAnthropicRoute(route)) {
       if (raw.alias !== routeModelId(route)) throw new DesktopProfileError("real Anthropic routes must keep their exact model id", `profile.assignments.${route}.alias`);
-    } else if (!validDateAlias(raw.alias)) {
+    } else if (!isDesktopDateAlias(raw.alias)) {
       throw new DesktopProfileError("must be a valid claude-opus-4-8-2026MMDD alias", `profile.assignments.${route}.alias`);
     }
     if (aliases.has(raw.alias)) throw new DesktopProfileError(`duplicate alias "${raw.alias}"`, `profile.assignments.${route}.alias`);
