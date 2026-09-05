@@ -648,6 +648,10 @@ function anthropicFamilyContextWindow(
   }
 }
 
+/**
+ * Resolve the configured context window in exact-model, Anthropic numeric-family,
+ * then provider-wide order. Return undefined when the selected value is not positive.
+ */
 export function configuredContextWindow(prov: OcxProviderConfig, id: string): number | undefined {
   const configured = modelRecordValue(prov.modelContextWindows, id)
     ?? (prov.adapter === "anthropic" ? anthropicFamilyContextWindow(prov.modelContextWindows, id) : undefined)

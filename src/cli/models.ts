@@ -87,6 +87,11 @@ interface ModelEntry {
   reasoningEfforts: string[] | null;
 }
 
+/**
+ * Collect static configured models for all providers or one selected provider.
+ * Keep each provider's default model first and resolve metadata through shared helpers.
+ * Live-discovered models are not fetched by this listing.
+ */
 function collectModels(config: OcxConfig, providerFilter?: string): ModelEntry[] {
   const entries: ModelEntry[] = [];
   const providers = providerFilter
@@ -98,6 +103,7 @@ function collectModels(config: OcxConfig, providerFilter?: string): ModelEntry[]
     const seen = new Set<string>();
     const inputModalities = prov.modelInputModalities ?? {};
 
+    /** Append one model with resolved metadata, ignoring duplicates within this provider. */
     const addModel = (model: string, isDefault: boolean) => {
       if (seen.has(model)) return;
       seen.add(model);
