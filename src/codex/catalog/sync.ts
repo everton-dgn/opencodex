@@ -307,6 +307,11 @@ function routedDisplayName(slug: string, model?: CatalogModel, config?: Pick<Ocx
   return slug;
 }
 
+/**
+ * Cria uma entrada nativa ou roteada a partir do snapshot upstream, de um clone
+ * do template ou de campos mínimos. Aplica os metadados e limites pertinentes
+ * sem alterar o template nem herdar sua marca de nome ou histórico de prioridade.
+ */
 export function deriveEntry(
   template: RawEntry | null,
   slug: string,
@@ -1657,6 +1662,12 @@ export function finalizeAutoReviewModelOverride(
   return applyAutoReviewModelOverride(models, readConfiguredAutoReviewModel(), sourceModels);
 }
 
+/**
+ * Mescla o catálogo retido com os modelos visíveis e as configurações atuais,
+ * incluindo os nomes nativos. Tenta preservar o backup original e usa a permissão
+ * de escrita para publicar o resultado apenas se os bytes mudarem, retornando
+ * a contagem de entradas roteadas e por conta, o caminho e o estado da gravação.
+ */
 function writeRetainedCatalogSync({
   config,
   goModels,
