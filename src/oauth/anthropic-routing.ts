@@ -85,9 +85,19 @@ export interface AnthropicAccountPoolConfig {
   quotaWindow?: OcxAccountPoolQuotaWindow;
 }
 
+/**
+ * Where a cooldown's length came from. Same vocabulary as `CodexCooldownSource`, because it
+ * answers the same question for the same reason: `retry-after` is upstream answering THIS
+ * refusal, `reset-derived` is upstream stating when the spent window reopens, and `default`
+ * is our own guess. The dashboard renders the first as a rate limit and the rest as quota,
+ * which is exactly the distinction a reset-derived cooldown carries -- collapsing it into
+ * `retry-after` would report a drained five-hour window as request-rate throttling.
+ */
+type AnthropicCooldownSource = "retry-after" | "reset-derived" | "default";
+
 interface AccountHealth {
   cooldownUntil: number;
-  cooldownSource: "retry-after" | "default";
+  cooldownSource: AnthropicCooldownSource;
 }
 
 interface AffinityEntry {
@@ -751,11 +761,13 @@ export function rotateAnthropicAccountOn429(
   // without that fallback such a refusal cools for the 60s default and the exhausted
   // account is back in the rotation a minute later.
   const parsedRetry = parseRetryAfterMs(retryAfterHeader, now);
-  const measured = parsedRetry ?? parseRateLimitResetMs(rateLimitHeaders, now);
-  const cooldownMs = measured ?? DEFAULT_COOLDOWN_MS;
+  const resetDerived = parsedRetry === undefined ? parseRateLimitResetMs(rateLimitHeaders, now) : undefined;
+  const cooldownMs = parsedRetry ?? resetDerived ?? DEFAULT_COOLDOWN_MS;
   upstreamHealth.set(failedAccountId, {
     cooldownUntil: now + cooldownMs,
-    cooldownSource: measured !== undefined ? "retry-after" : "default",
+    cooldownSource: parsedRetry !== undefined
+      ? "retry-after"
+      : resetDerived !== undefined ? "reset-derived" : "default",
   });
   sweepExpiredOnWrite(now);
   clearAnthropicSessionAffinityForAccount(failedAccountId);

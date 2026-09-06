@@ -5971,6 +5971,11 @@ async function handleResponsesInner(
     retryAfter: string | null,
     responseHeaders?: Headers,
   ): Promise<ProviderAdapter | null> => {
+    // Read BEFORE the rotation rebinds the account: a 429 reports the refusing account's
+    // utilization too, and `onUpstreamResponse` cannot deliver it because both sidecar loops
+    // throw on a non-OK response before reaching their success hook. Without this the one
+    // reading that matters most -- the window that just hit 100% -- is the one never recorded.
+    if (responseHeaders) observeAnthropicRateLimitHeaders(anthropicPoolAccountId, responseHeaders);
     const rotated = rotateProviderTransportOn429(config, route.providerName, route.provider, {
       retryAfter,
       now: Date.now(),
@@ -6027,6 +6032,8 @@ async function handleResponsesInner(
         const admitted = await commitResolvedOAuthSelection(await getAnthropicPoolAccessSnapshot(nextAccountId));
         if (!admitted) throw new Error("OAuth selection changed during recovery");
         anthropicPoolAccountId = admitted.accountId;
+        // Re-captured with the rebind, for the same reason as the main recovery loop.
+        anthropicQuotaWriterGeneration = captureConfigGeneration();
         anthropicPoolFailovers += 1;
         route.provider = { ...route.provider, apiKey: admitted.accessToken };
         logCtx.provider = formatAnthropicProviderForLog("anthropic", admitted.accountId, config);
@@ -7065,6 +7072,11 @@ async function handleResponsesInner(
           const admitted = await commitResolvedOAuthSelection(await getAnthropicPoolAccessSnapshot(nextAccountId));
           if (!admitted) throw new Error("OAuth selection changed during recovery");
           anthropicPoolAccountId = admitted.accountId;
+          // Re-captured with the rebind, never left at the value taken for the account that
+          // just 429'd: the fence answers "is this measurement still current for THIS
+          // account", so carrying a stale generation past a rotation can refuse the very
+          // observation the rotation exists to produce.
+          anthropicQuotaWriterGeneration = captureConfigGeneration();
           anthropicPoolFailovers += 1;
           route.provider = { ...route.provider, apiKey: admitted.accessToken };
           invalidateSameTargetRequest();
@@ -7489,6 +7501,8 @@ async function handleResponsesInner(
             const admitted = await commitResolvedOAuthSelection(await getAnthropicPoolAccessSnapshot(nextAccountId));
             if (!admitted) throw new Error("OAuth selection changed during recovery");
             anthropicPoolAccountId = admitted.accountId;
+            // Re-captured with the rebind, for the same reason as the main recovery loop.
+            anthropicQuotaWriterGeneration = captureConfigGeneration();
             anthropicPoolFailovers += 1;
             route.provider = { ...route.provider, apiKey: admitted.accessToken };
             invalidateSameTargetRequest();

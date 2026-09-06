@@ -433,9 +433,12 @@ to a short default backoff. Affinity is process-local and size-bounded. Credenti
 account as needing reauthentication. If all eligible accounts are cooling, clients receive 429 with
 `Retry-After` when known, not an authentication error.
 
-Every Anthropic response also reports the serving account's 5-hour and weekly utilization, and those
-readings are recorded against that account. Usage-aware selection therefore works from the accounts
-you actually use, without waiting for the dashboard Providers page to poll them.
+Anthropic responses also report the serving account's 5-hour and weekly utilization, and whichever
+of those two a given response carries is recorded against that account — each window independently,
+on refusals as well as successes. Usage-aware selection therefore works from the accounts you
+actually use, without waiting for the dashboard Providers page to poll them. These readings refresh
+the existing row rather than replacing it, so the model-scoped weekly bars that only the usage
+endpoint reports are preserved.
 
 :::caution[Experimental]
 Leave this disabled unless you understand Anthropic account policy risk. Prefer manual

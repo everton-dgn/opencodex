@@ -32,9 +32,10 @@ Operational contract when enabled:
   otherwise the reset time of whichever window Anthropic marks `rejected` — a drained 5-hour
   window is honoured up to six hours rather than being retried every few minutes. A refusal that
   states neither falls back to a default backoff.
-- Every response reports the serving account's 5-hour and weekly utilization, and those readings
-  are recorded for that account. Usage-aware selection works from ordinary traffic, without
-  waiting for a dashboard poll.
+- Responses report the serving account's 5-hour and weekly utilization, and whichever of those
+  two the response carries is recorded for that account — each window independently, and a
+  refusal counts as well as a success. Usage-aware selection works from ordinary traffic,
+  without waiting for a dashboard poll.
 - Affinity is **process-local** (lost on proxy restart).
 - **401/403** credential failures quarantine the account (`needsReauth`) so it is excluded from
   selection until re-authenticated.

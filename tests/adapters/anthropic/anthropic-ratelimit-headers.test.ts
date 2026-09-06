@@ -20,11 +20,13 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  clearAnthropicAccountCooldown,
   clearAnthropicAccountPoolState,
   forgetAnthropicFailoverQuorum,
   getAnthropicAccountHealthSnapshot,
   rotateAnthropicAccountOn429,
 } from "../../../src/oauth/anthropic-routing";
+import { projectStoredOAuthAccountHealth } from "../../../src/oauth/health";
 import {
   clearAccountQuotaCache,
   getCachedProviderAccountQuota,
@@ -157,7 +159,9 @@ describe("Anthropic cooldown honours the stated window", () => {
     rotateAnthropicAccountOn429(poolEnabled(), ids[0]!, null, null, start, drainedFiveHour(resetEpochSeconds));
     const health = getAnthropicAccountHealthSnapshot(ids[0]!, start);
     expect(health?.cooldownUntil).toBe(resetEpochSeconds * 1000);
-    expect(health?.cooldownSource).toBe("retry-after");
+    // Its own source, not "retry-after": the dashboard renders that one as request-rate
+    // throttling, and a spent five-hour window is quota. Same vocabulary the Codex pool uses.
+    expect(health?.cooldownSource).toBe("reset-derived");
   });
 
   test("an ALLOWED window's reset never cools the account", async () => {
@@ -195,6 +199,33 @@ describe("Anthropic cooldown honours the stated window", () => {
     });
     rotateAnthropicAccountOn429(poolEnabled(), ids[0]!, null, null, start, bothDrained);
     expect(getAnthropicAccountHealthSnapshot(ids[0]!, start)?.cooldownUntil).toBe(weeklyReset * 1000);
+  });
+
+  test("a reset-derived cooldown surfaces as quota, a Retry-After as a rate limit", async () => {
+    const start = Date.now();
+    const ids = await seed(2);
+    const account = getAccountSet("anthropic")!.accounts.find(a => a.id === ids[0]!)!;
+    // The distinction is not cosmetic: the dashboard tells an operator to wait out a rate
+    // limit and to switch accounts on spent quota. A drained five-hour window is the second.
+    rotateAnthropicAccountOn429(
+      poolEnabled(),
+      ids[0]!,
+      null,
+      null,
+      start,
+      drainedFiveHour(Math.floor((start + 90 * 60_000) / 1000)),
+    );
+    expect(projectStoredOAuthAccountHealth("anthropic", account, start)).toMatchObject({
+      status: "cooldown",
+      reason: "quota",
+    });
+
+    clearAnthropicAccountCooldown(ids[0]!);
+    rotateAnthropicAccountOn429(poolEnabled(), ids[0]!, "300", null, start);
+    expect(projectStoredOAuthAccountHealth("anthropic", account, start)).toMatchObject({
+      status: "cooldown",
+      reason: "rate_limit",
+    });
   });
 
   test("Retry-After wins over the header reset", async () => {
