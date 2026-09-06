@@ -6,6 +6,8 @@ import type { CodexAccount } from "./accounts";
  * /v1/messages surface, the `ocx claude` launcher, and the GUI Claude page.
  */
 export interface OcxClaudeCodeConfig {
+  /** Opt-in translated Messages admission; unset keeps legacy behavior. Native passthrough is exempt. */
+  compatibility?: "shadow" | "enforce";
   /** Kill switch for the /v1/messages inbound (GUI "Claude ON" toggle). Default: enabled. */
   enabled?: boolean;
   /**
@@ -409,6 +411,13 @@ export interface OcxConfig {
    * one key at a time rather than widening a shared union.
    */
   clientIntegrations?: OcxClientIntegrationsConfig;
+  /** Aside account-backed profile synchronization; individual overrides survive bulk refresh. */
+  asideProfileSync?: {
+    allProfiles?: boolean;
+    profiles?: Record<string, boolean>;
+    /** Stable provenance for the one legacy root ownership record, or no root owner. */
+    legacyProfileId?: number | null;
+  };
   /**
    * Up to 5 Codex-facing catalog ids to feature first. Values may be bare catalog ids,
    * exact account-qualified "<selector>/<native-openai-model>" ids, or routed
@@ -430,6 +439,8 @@ export interface OcxConfig {
    * Unset or empty leaves catalog priorities unchanged.
    */
   modelPickerOrder?: string[];
+  /** Saved preset provenance; snapshots are not recomputed during catalog discovery. */
+  modelPickerOrderMode?: "alphabetical" | "provider" | "most-used";
   /**
    * Priority-ordered fallback models for spawned sub-agents. When the requested
    * model is quota-exhausted or recently failed, opencodex rewrites the child
@@ -808,10 +819,10 @@ export interface OcxConfig {
    * provider has 2 or more eligible stored accounts, the same consent rule an `apiKeyPool` of
    * two keys already applies, and a single account remains a strict no-op.
    *
-   * What `enabled: false` still refuses is the PRE-DISPATCH preference: steering a request
-   * upstream has not refused toward the account with more known headroom. That moves a healthy
-   * request, so it stays a real choice. `providers.<name>.oauthAccountFailover` overrides this
-   * per provider in either direction; reactive 429 rotation remains presence-driven.
+   * Proactive avoidance of an exhausted selected account requires `enabled: true`.
+   * A healthy selected account retains priority; an unknown quota is not exhaustion.
+   * `providers.<name>.oauthAccountFailover` overrides this per provider in either direction.
+   * Reactive 429 rotation remains presence-driven even when proactive routing is disabled.
    */
   oauthAccountFailover?: {
     enabled?: boolean;
