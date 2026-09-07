@@ -58,9 +58,17 @@ const DEFAULT_COOLDOWN_MS = 60_000;
  * Anthropic's five-hour window answers a drained account with `Retry-After: 7999` and a
  * matching `anthropic-ratelimit-unified-5h-reset`. Clamping that to 15 minutes does not
  * shorten the ban -- upstream keeps refusing -- it only makes the pool re-offer the same
- * exhausted account every quarter hour and hand the client another 429. Five hours plus a
- * margin covers the longest window Anthropic publishes; anything beyond it is treated as a
- * wire anomaly rather than a fact.
+ * exhausted account every quarter hour and hand the client another 429.
+ *
+ * Six hours covers the five-hour window with margin. It does NOT cover the seven-day one,
+ * and that is the deliberate half of this number: an account whose WEEKLY window is spent
+ * states a reset days away, and this ceiling re-offers it every six hours until then. The
+ * alternative -- honouring a multi-day reset -- benches an account for days on a single
+ * refusal, and nothing here can distinguish a genuinely drained week from a reset the
+ * operator has since topped up, changed plan on, or that upstream revised. Six hours is
+ * the cost of being wrong about that, paid once per six hours instead of once per fifteen
+ * minutes. Anything beyond the ceiling is treated as a bound, not as a fact about the
+ * account.
  */
 const MAX_MEASURED_COOLDOWN_MS = 6 * 60 * 60_000;
 const AFFINITY_IDLE_TTL_MS = 24 * 60 * 60_000;
