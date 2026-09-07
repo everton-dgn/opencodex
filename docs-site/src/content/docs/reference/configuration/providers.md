@@ -234,8 +234,10 @@ Supported bare native GPT rows in the local Codex catalog also accept exact labe
 `providers.openai.modelDisplayNames`, for example `"gpt-6-astra": "GPT 6 Astra"`.
 Both startup synchronization and local catalog convergence reapply these labels. Removing a label
 restores the original native name only when the row's display name still matches the applied
-override. A newer external display name is preserved instead. Model IDs, metadata (including capabilities), ordering,
-routed combo aliases, and account-qualified rows remain unchanged. This local catalog override does
+override. A newer external display name is preserved subject to existing native metadata normalization;
+for example, Astra (`gpt-6-astra`) still replaces a non-pinned name with its pinned native name.
+The label overlay leaves model IDs, metadata (including capabilities), ordering,
+routed combo aliases, and account-qualified rows unchanged. This local catalog override does
 not relabel the HTTP model listings or virtual `*-pro` rows.
 
 The effective label order is operator `modelDisplayNames`, then provider catalog metadata, then the

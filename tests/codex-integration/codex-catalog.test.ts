@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync} from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { codexAccountGatedCanonicalWireModel } from "../../src/server/responses/core";
@@ -53,9 +53,17 @@ import {
 import {
   CANONICAL_NATIVE_CATALOG_CONTENT_POLICY,
   mergeCatalogEntriesFromObservedState,
+  syncCatalogModels,
   type ObservedCatalogMergeInput,
 } from "../../src/codex/catalog/sync";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { saveConfig } from "../../src/config";
+import { SUBAGENT_MODELS_VERSION } from "../../src/config/subagent-models";
+import { captureCatalogAdmissionSnapshot } from "../../src/codex/catalog-admission";
+import { convergeCodexCatalog } from "../../src/codex/convergence";
+import { resetCodexRuntimeResolveCacheForTests } from "../../src/codex/runtime";
+import { resolveCodexCatalogSerializationDatabasePath, resolveEffectiveUserIdentity } from "../../src/codex/user-identity";
+import { CODEX_FORWARD_BASE_URL } from "../../src/providers/openai-tiers";
 
 const originalFetch = globalThis.fetch;
 
@@ -3045,6 +3053,108 @@ function mergeObservedForTest(
   });
 }
 
+// Exercise both production callers: removing either caller's nativeDisplayNames argument
+// must fail the persisted-label assertion, even if the pure merge tests still pass.
+test.each(["retained", "convergence"] as const)("%s persists and restores native labels through the catalog writer", async writer => {
+  const envKeys = ["CODEX_HOME", "OPENCODEX_HOME", "CODEX_CLI_PATH"] as const;
+  const previousEnv = envKeys.map(key => process.env[key]);
+  const previousFetch = globalThis.fetch;
+  const root = realpathSync.native(mkdtempSync(join(tmpdir(), "ocx-native-label-writer-")));
+  const codexHome = join(root, "codex");
+  const catalogPath = join(codexHome, "custom-catalog.json");
+  let fetchCalls = 0;
+  try {
+    mkdirSync(codexHome);
+    mkdirSync(join(root, "ocx"));
+    process.env.CODEX_HOME = codexHome;
+    process.env.OPENCODEX_HOME = join(root, "ocx");
+    writeFileSync(join(codexHome, "config.toml"), 'model_catalog_json = "custom-catalog.json"\n');
+    const catalog = { models: [{ ...nativeTemplate(), slug: "gpt-5.6-sol", display_name: "Fixture Sol" }] };
+    // Reuse the executable-fixture protocol from catalog-full-picker-order.test.ts so
+    // admission and a forced runtime refresh observe the same version and bundled rows.
+    const script = join(root, "fixture-codex.js");
+    writeFileSync(script, [
+      'if (process.argv.includes("--version")) console.log("codex-cli 0.145.0");',
+      `else process.stdout.write(${JSON.stringify(JSON.stringify(catalog))});`,
+    ].join("\n"));
+    if (process.platform === "win32") {
+      process.env.CODEX_CLI_PATH = join(root, "fixture-codex.cmd");
+      writeFileSync(process.env.CODEX_CLI_PATH, `@echo off\r\n"${process.execPath}" "${script}" %*\r\n`);
+    } else {
+      process.env.CODEX_CLI_PATH = join(root, "fixture-codex");
+      const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+      writeFileSync(process.env.CODEX_CLI_PATH, `#!/bin/sh\nexec ${quote(process.execPath)} ${quote(script)} "$@"\n`);
+      chmodSync(process.env.CODEX_CLI_PATH, 0o755);
+    }
+    resetCatalogRuntimeStateForTests();
+    resetCodexRuntimeResolveCacheForTests();
+    resetCodexModelEntitlementCacheForTests();
+    expect(loadBundledCodexCatalog()?.models?.[0]?.slug).toBe("gpt-5.6-sol");
+    writeFileSync(catalogPath, JSON.stringify(catalog));
+    globalThis.fetch = (async () => {
+      fetchCalls += 1;
+      throw new Error("native label writer fixture must not make a network request");
+    }) as typeof fetch;
+    const config: OcxConfig = {
+      port: 10100, defaultProvider: "openai",
+      subagentModels: [], subagentModelsVersion: SUBAGENT_MODELS_VERSION,
+      providers: {
+        openai: { adapter: "openai-responses", baseUrl: CODEX_FORWARD_BASE_URL, authMode: "forward" },
+      },
+    };
+    const write = async (labels?: Record<string, string>) => {
+      if (labels) config.providers.openai!.modelDisplayNames = labels;
+      else delete config.providers.openai!.modelDisplayNames;
+      saveConfig(config);
+      if (writer === "convergence") {
+        const result = await convergeCodexCatalog(captureCatalogAdmissionSnapshot(config), {
+          action: "converge", scope: "catalog", reason: "management-mutation", mode: "explicit", deadlineMs: 5_000,
+        });
+        expect(result.catalogRefresh.status).toBe("committed");
+      } else {
+        const result = await syncCatalogModels(config);
+        expect(result.path).toBe(catalogPath);
+        expect(result.skippedReason).toBeUndefined();
+      }
+      return (JSON.parse(readFileSync(catalogPath, "utf8")) as { models: Record<string, unknown>[] }).models;
+    };
+    const original = await write();
+    const renamed = await write({ "gpt-5.6-sol": "Custom Sol" });
+    const renamedBytes = readFileSync(catalogPath, "utf8");
+    const native = renamed.find(row => row.slug === "gpt-5.6-sol")!;
+    expect(native.display_name).toBe("Custom Sol");
+    expect(native.opencodex_native_display_name).toEqual({
+      slug: "gpt-5.6-sol", original: "Fixture Sol", applied: "Custom Sol",
+    });
+    const { opencodex_native_display_name: marker, ...withoutMarker } = native;
+    expect(marker).toBeDefined();
+    expect({ ...withoutMarker, display_name: "Fixture Sol" })
+      .toEqual(original.find(row => row.slug === "gpt-5.6-sol")!);
+    expect(await write({ "gpt-5.6-sol": "Custom Sol" })).toEqual(renamed);
+    expect(readFileSync(catalogPath, "utf8")).toBe(renamedBytes);
+    expect((await write({ "gpt-5.6-sol": "Changed Sol" })).find(row => row.slug === "gpt-5.6-sol")?.display_name)
+      .toBe("Changed Sol");
+    expect(await write()).toEqual(original);
+    expect(fetchCalls).toBe(0);
+  } finally {
+    try {
+      const database = resolveCodexCatalogSerializationDatabasePath(resolveEffectiveUserIdentity(), codexHome);
+      for (const suffix of ["", "-journal", "-wal", "-shm"]) rmSync(`${database}${suffix}`, { force: true });
+    } finally {
+      globalThis.fetch = previousFetch;
+      envKeys.forEach((key, index) => {
+        const value = previousEnv[index];
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      });
+      resetCatalogRuntimeStateForTests();
+      resetCodexRuntimeResolveCacheForTests();
+      resetCodexModelEntitlementCacheForTests();
+      removeTreeWithRetry(root);
+    }
+  }
+}, 30_000);
+
 describe("Codex catalog routed normalization", () => {
   test("reapplies native display names after repeated catalog merges without changing model metadata", () => {
     const input = {
@@ -3095,6 +3205,29 @@ describe("Codex catalog routed normalization", () => {
       expect(renamed.find(entry => entry.slug === slug)?.display_name).toBe("Custom name");
       expect(mergeObservedForTest({ catalogModels: renamed, routedEntries: [] })).toEqual(original);
     }
+  });
+
+  test("clearing a native label keeps Astra external edits subject to pinned metadata normalization", () => {
+    const original = mergeObservedForTest({
+      catalogModels: [{ ...nativeTemplate(), slug: "gpt-6-astra", display_name: "gpt-6-astra" }],
+      routedEntries: [],
+    });
+    const renamed = mergeObservedForTest({
+      catalogModels: original, routedEntries: [],
+      nativeDisplayNames: { "gpt-6-astra": "Custom Astra" },
+    });
+    const external = JSON.parse(JSON.stringify(renamed)) as Record<string, unknown>[];
+    const astra = external.find(entry => entry.slug === "gpt-6-astra")!;
+    astra.display_name = "External Astra name";
+    astra.context_window = 123;
+    const restored = mergeObservedForTest({ catalogModels: external, routedEntries: [] });
+    const row = restored.find(entry => entry.slug === "gpt-6-astra")!;
+    expect(row).toEqual(original.find(entry => entry.slug === "gpt-6-astra")!);
+    expect(row.display_name).not.toBe("External Astra name");
+    expect(row.context_window).toBe(272_000);
+    expect(row.opencodex_native_display_name).toBeUndefined();
+    expect(astra.display_name).toBe("External Astra name");
+    expect(astra.opencodex_native_display_name).toBeDefined();
   });
 
   test("native display names do not leak overlay markers through catalog templates", () => {
