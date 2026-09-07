@@ -630,7 +630,15 @@ describe("update stops the running proxy before replacing files", () => {
         // Bind the actual child environment, not merely HOME, to this case.
         expect(resolveCodexHomeDir({ env })).toBe(join(root, ".codex"));
         const port = await freePort();
-        expect(existsSync(bundledBun)).toBe(true);
+        // A precondition, not the assertion: the recovery path under test hands the launcher
+        // the bundled Bun, so without it the case cannot run at all. `repoRoot` resolves to the
+        // checkout being tested, which in a git worktree is NOT the primary checkout -- a
+        // worktree that was never `bun install`ed fails here with a bare `expected true`,
+        // reading like a defect in the code under test rather than missing setup.
+        expect(
+          existsSync(bundledBun),
+          `${bundledBun} is missing: run \`bun install\` in this checkout (each git worktree needs its own).`,
+        ).toBe(true);
         mkdirSync(dirname(launcher), { recursive: true });
         mkdirSync(join(packageRoot, "node_modules"), { recursive: true });
         mkdirSync(opencodexHome, { recursive: true });
